@@ -42,39 +42,68 @@ live call, verbatim:
 }
 ```
 
-Confirmed by this and a second live call (`build failed, exit code 1` → `probability: 0.01`, matching
-Vercel's own docs example exactly):
+Confirmed live, 5 of 6 planned cases (`choice`, `score`, a 3-question mixed-type batch, and a second
+boolean all succeeded; structured object state did not — see below):
 
-- **Naming shift at this layer.** `noul` → `type: "boolean"`, the value key is `probability` not
-  `noul`. Semantics unchanged — still P(yes/true), still no distribution.
-- **`confidence` for a boolean answer is an empty object**, confirming the native docs: noul/boolean
-  carries none. `providerMetadata.typesafe.confidence` is where confidence would live for choice/score
-  (unconfirmed live — see below).
-- **Pricing checks out exactly.** `marketCost` for 282 input tokens = `0.000011844` =
-  `282 × 0.000000042`. Matches the $0.042/MTok figure to five decimal places, independent of
-  TypeSafe's own docs. `cost: "0"` is the promo waiving that charge — a separate field from
-  `marketCost`, which is what it would normally bill.
-- **`outputTokens` is nonzero (21) even though output is priced at $0.** Tokens are counted and
-  reported; only billing is zero.
-- **Results are rounded to 2 decimals** (`rounding` block on every response), as the TypeSafe
-  provider docs describe.
+**Choice** — `state: "My card was charged twice for one order."`, options billing/shipping/technical:
+```json
+{ "type": "choice", "choice": "billing", "probabilities": { "billing": 1, "technical": 0, "shipping": 0 } }
+```
+`providerMetadata.typesafe.confidence` was `{ "route": 1 }` — **choice does carry confidence**, but it
+lives in `providerMetadata`, not on the answer itself.
 
-**Not yet confirmed live** — `choice`, `score`, a mixed-type batch on one state, and structured
-(object) state. The test script (`jev-eval.ts` in the implementation repo) covers all of these; it
-hit the constraint below before finishing the sweep.
+**Score** — rating a PR description against 4 ordered levels:
+```json
+{ "type": "score", "score": 2.93, "probabilities": { "0": 0, "1": 0, "2": 0.06, "3": 0.9400000000000001 } }
+```
+`confidence: { "quality": 0.93 }`. Note the float artifact on `0.94` — real floating-point noise from
+summed rounded probabilities, not a formatting bug. **Never compare a `score` probability for equality;
+round before comparing or displaying.**
 
-### The free tier is aggressively rate-limited — this matters for the whole cost plan
+**Mixed-type batch, one state, one round trip** (2 booleans + 1 score) — confirms D1's core claim:
+```json
+{
+  "authIssue": { "type": "boolean", "probability": 0.97 },
+  "wantsRefund": { "type": "boolean", "probability": 0.99 },
+  "urgency": { "type": "score", "score": 1.62, "probabilities": { "0": 0, "1": 0.38, "2": 0.62 } }
+}
+```
+`confidence` was `{ "urgency": 0.43 }` — **only choice/score question ids appear as keys in
+`confidence`; boolean question ids are absent entirely, not present with a null or empty value.** This
+is the precise, confirmed rule for the decoder: presence in the `confidence` map, not the answer
+`type`, is what to branch on.
 
-Two calls succeeded, then every subsequent call failed with `429 rate_limit_exceeded`: *"Free tier
-requests on this model are rate-limited."* Waiting 8 seconds between calls did not clear it, meaning
-the window is longer than seconds — minutes, hours, or a daily quota, not determined. **No
-`Retry-After` header or reset time is exposed anywhere in the error response.**
+- **Naming shift at this layer.** `noul` → `type: "boolean"`, value key `probability` not `noul`.
+  Semantics unchanged — still P(yes/true), still no distribution.
+- **Pricing checks out exactly**, again: `marketCost` for 282 input tokens = `0.000011844` =
+  `282 × 0.000000042`, matching $0.042/MTok to five decimal places — independent confirmation, not
+  just cited from TypeSafe's own docs.
+- **`outputTokens` is nonzero even though output is priced at $0.** Tokens are counted and reported;
+  only billing is zero.
+- **Results are rounded to 2 decimals** (`rounding` block on every response) — see the score float
+  note above for why that doesn't mean clean arithmetic.
 
-This directly threatens the flagship analysis (`03-LAUNCH.md`), which assumes hundreds of thousands
-to millions of calls. Until the real limit is known, assume the free promo supports **connectivity
-testing and small samples only** — not a corpus-scale run. Vercel's error names the fix: "Upgrade to
-paid credits." Whether to do that, and when, is a cost decision for the project owner, not something
-to do unprompted.
+**Still not confirmed live:** structured (object) state. Both attempts failed on the rate limit below
+rather than a validation error, so there's no reason to think it behaves differently from string
+state — Vercel's own docs show a worked object-state example — but "no reason to think otherwise" is
+not the same as observed, and it isn't in this document as fact.
+
+### The rate limit persists after topping up paid credits — it's tied to the promo, not the balance
+
+Every successful call above still shows `cost: "0"` even after adding paid credits to the account.
+**Jev itself stays on its own $0 promotional quota regardless of account balance** — topping up fixed
+the earlier account-verification block (a card-on-file requirement), but did not remove Jev's own
+throttle, because paid credits were never being spent on Jev calls to begin with.
+
+The quota looks small and per-window: two separate runs both got exactly **5 successful calls before
+the 6th failed**, reproduced twice in a row regardless of which question was 6th. No `Retry-After` or
+reset time is exposed anywhere in the error response, so the exact window (per-minute? per-hour?) is
+still unknown — only the approximate size (~5 calls) is established.
+
+This constrains the flagship analysis (`03-LAUNCH.md`), which assumes hundreds of thousands to
+millions of calls. At ~5 calls per window with an unknown window length, that plan needs either the
+real window measured, a paid (non-promotional) tier for the model itself, or TypeSafe's own early
+access. Which of those to pursue, and when, is a cost/timeline decision for the project owner.
 
 ### For later: the direct-to-TypeSafe path (early access, not yet available)
 
