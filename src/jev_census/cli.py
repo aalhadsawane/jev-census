@@ -1,12 +1,15 @@
-"""`census run` (T1.9, durable since P2): thin Typer wrapper around
-`runner.run_census`. Progress/error reporting only lives here; every
-correctness concern (caching, atomic shards, checkpointing, resume,
-quarantine) lives in `runner.py`, which is framework-agnostic and tested
-without ever touching this CLI layer.
+"""`census run`: thin Typer wrapper around `scheduler.run_scheduled` — the
+concurrent, AIMD-throttled Scheduler (P4) that replaced T1.9/P2/P3's
+sequential `runner.run_census` as the CLI's actual execution path.
+`runner.run_census` is kept as-is (still fully tested, still importable) as
+the pure sequential reference implementation; every scale/concurrency
+concern here delegates straight to `scheduler.py`. Progress/error reporting
+only lives in this file.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -14,10 +17,11 @@ import typer
 from dotenv import load_dotenv
 from rich.console import Console
 
-from .client import JevClient, JevConfigError
+from .client import AsyncJevClient, JevConfigError
 from .estimate import DEFAULT_SAMPLE_SIZE, format_estimate
 from .estimate import estimate as run_estimate
-from .runner import RunConfig, RunnerError, run_census
+from .runner import RunnerError
+from .scheduler import SchedulerConfig, format_progress, run_scheduled
 
 app = typer.Typer(add_completion=False, help="census: ask the same questions of every row, get back a table.")
 console = Console()
@@ -29,22 +33,21 @@ def main() -> None:
 
     A bare callback here (even a no-op) keeps `run` an explicit subcommand —
     Typer collapses a single `@app.command()` into the bare app otherwise,
-    which would break the `census run ...` surface once T3.2/T6.1/etc. are
-    still just names in 01-DESIGN.md's CLI section rather than implemented.
+    which would break the `census run ...` surface once T6.1/etc. are still
+    just names in 01-DESIGN.md's CLI section rather than implemented.
     """
 
 
-def _build_client():
-    # Test-only seam: a subprocess-based chaos test (T2.7) needs `kill -9` to
-    # mean something, so it runs this CLI as a real OS process — which means
-    # it can't inject a fake client via Python call arguments. This env var is
-    # never set in a normal invocation.
+def _build_async_client():
+    # Test-only seam: a subprocess-based chaos/SIGINT test needs a real OS
+    # process, which means it can't inject a fake client via Python call
+    # arguments. This env var is never set in a normal invocation.
     if os.environ.get("CENSUS_FAKE_CLIENT") == "1":
-        from tests.fakes import FakeJevClient
+        from tests.fakes import FakeAsyncJevClient
 
         delay = float(os.environ.get("CENSUS_FAKE_CLIENT_DELAY", "0"))
-        return FakeJevClient(delay_seconds=delay)
-    return JevClient()
+        return FakeAsyncJevClient(delay_seconds=delay)
+    return AsyncJevClient()
 
 
 @app.command()
@@ -80,6 +83,8 @@ def run(
         None, "--resume", help="Run id to resume; refuses if the question set changed"
     ),
     shard_size: int = typer.Option(5000, "--shard-size", help="Cells buffered per shard before finalizing"),
+    concurrency_max: int = typer.Option(64, "--concurrency-max", help="AIMD concurrency ceiling"),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress periodic progress lines"),
 ) -> None:
     using_fake_client = os.environ.get("CENSUS_FAKE_CLIENT") == "1"
     if not using_fake_client:
@@ -88,7 +93,7 @@ def run(
             console.print("[red]TYPESAFE_API_KEY not set (checked environment and .env.local)[/red]")
             raise typer.Exit(code=1)
 
-    config = RunConfig(
+    config = SchedulerConfig(
         input_path=input,
         questions_path=questions,
         budget_usd=budget,
@@ -98,11 +103,13 @@ def run(
         id_field=id_field,
         resume_run_id=resume,
         shard_size=shard_size,
+        concurrency_ceiling=concurrency_max,
+        on_progress=(None if quiet else lambda snapshot: console.print(format_progress(snapshot))),
     )
-    client = _build_client()
+    client = _build_async_client()
 
     try:
-        result = run_census(config, client)
+        result = asyncio.run(run_scheduled(config, client))
     except RunnerError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
@@ -125,6 +132,12 @@ def run(
     )
     if result.calibration_ratio is not None:
         console.print(f"estimator calibration: actual/estimated = {result.calibration_ratio:.2f}x")
+
+    if result.interrupted:
+        console.print("[yellow]interrupted (SIGINT) — stopped cleanly, nothing in flight was lost[/yellow]")
+        console.print(f"[yellow]resume command: census run --resume {result.run_id} ...[/yellow]")
+        # 130 = 128 + SIGINT's signal number, the conventional Unix exit code.
+        raise typer.Exit(code=130)
 
     if result.budget_exhausted:
         console.print(
