@@ -1,130 +1,196 @@
-# cartograph
+# census
 
-**Ask twenty typed questions of every row in a million-row corpus, and know what it will cost before
-you start.**
+**Ask the same questions of every row in a dataset, and get back a table.**
 
-`cartograph` is a batch semantic-labelling engine for [TypeSafe's Jev](https://typesafe.ai), the
-first System One model. Jev does not generate text. It evaluates *typed questions* — `Choice`,
-`Score`, `Noul` — against a state and returns calibrated probability distributions. Input costs
-$0.042 per million tokens; output is free.
+You have 480,000 support tickets. You want to know which are urgent, which team each belongs to,
+how angry the customer is, and which ones smell like churn. You would know all of that if you had
+infinite interns. You don't, so you have keyword rules that half-work.
 
-That pricing makes corpus-scale semantic labelling affordable for the first time. What it does not
-do is make it *easy*: a run over millions of rows needs batching, resumption, cost control,
-calibration and provenance, or it is a script that burns money and produces numbers nobody should
-trust. `cartograph` is that missing layer.
+`census` asks those questions — all of them, of every ticket — and hands you a Parquet table with the
+answers, the probability behind each one, and a report telling you how accurate each question
+actually is. It runs on [TypeSafe's Jev](https://typesafe.ai), a model that returns typed decisions
+instead of text at $0.042 per million input tokens.
 
-> **Status: pre-implementation.** This repository contains design documents only. No code is
-> written yet. The documents come first because several decisions here cannot be retrofitted, and
-> because the first version of this design was **wrong in an instructive way** — see below.
->
-> Start with [`docs/00-API-NOTES.md`](docs/00-API-NOTES.md), then
-> [`docs/01-MOTIVATION.md`](docs/01-MOTIVATION.md).
+The 480,000 tickets above cost **about $7** and **half an hour**.
 
 ---
 
-## The economics, correctly
+## The whole product, end to end
 
-Billing per call is:
+### 1. You have a corpus
+
+`tickets.parquet` — 480,000 rows.
+
+| ticket_id | created_at | subject | body |
+|---|---|---|---|
+| T-1041 | 2026-03-02 | Payouts failing | Help! My payouts have been failing for 3 days and nobody has replied. |
+| T-1042 | 2026-03-02 | How do I export? | Where did the CSV export go in the new dashboard? |
+| T-1043 | 2026-03-02 | Considering Zendesk | We're evaluating alternatives. This is the third outage this month. |
+
+### 2. You write the questions once
+
+`support-triage.yaml`
+
+```yaml
+version: 1
+name: support-triage
+defaults:
+  projection: [subject, body]      # the only fields questions see
+
+questions:
+  - id: is_urgent
+    type: noul                     # yes/no → a probability
+    instructions: The customer states or implies the problem is time-sensitive.
+    criteria:
+      "true":  Blocked work, money at risk, or an explicit deadline.
+      "false": A question or request with no stated time pressure.
+
+  - id: department
+    type: choice                   # pick one → a distribution over options
+    instructions: The team that should handle this ticket.
+    criteria:
+      billing:   Payments, invoicing, refunds, payouts.
+      technical: Bugs, outages, integrations, API errors.
+      sales:     Pricing, upgrades, new accounts, renewals.
+
+  - id: frustration
+    type: score                    # ordered levels → a weighted value
+    instructions: How frustrated the customer sounds.
+    criteria:
+      - Calm and neutral.
+      - Mildly annoyed.
+      - Clearly frustrated.
+      - Angry, or threatening to escalate.
+
+  - id: churn_risk
+    type: noul
+    instructions: The customer signals they may stop using the product.
+    criteria:
+      "true":  Mentions cancelling, competitors, or a failed evaluation.
+      "false": No indication of leaving.
+```
+
+### 3. You check the price before you spend it
 
 ```
-tokens(state)  +  Σ over questions of tokens(instructions + criteria)
+$ census estimate --input tickets.parquet --questions support-triage.yaml
+
+  480,000 documents · 4 questions · 1 call group
+  tokens/doc:  state 120 (34%)  ·  schema 230 (66%)
+  total:       168M tokens  ≈  $7.06
+  runtime:     ~32 min at 250 docs/s
+
+  schema is the larger half — `census schema-tune` can price a terser question set
 ```
 
-Three consequences follow, and together they define the engine.
+### 4. You run it
 
-**1. Batch every question about a document into one call. This is free.**
-One state per request, and all questions see it. N separate calls pay for the document N times; one
-batched call pays once. TypeSafe's own cookbook measures **12.2x cheaper and 10.0x faster** for 13
-questions over a 54,000-character article — and verifies across repeated runs that the answers are
-*identical* either way, because each question is scored independently. There is no accuracy cost.
-Always batch. The saving grows with document size.
+```
+$ census run --input tickets.parquet --questions support-triage.yaml --budget 10 --out results/
 
-**2. The question schema is paid on every single document.**
-A 20-token title carrying a 650-token question battery is 97% schema. On short-document corpora the
-levers are therefore: ask fewer questions, write terser criteria, and prefer `noul` — the only
-primitive whose criteria are optional. Finding the *minimum sufficient schema* is a measurable
-optimisation problem, and it is this project's core technical contribution.
+  [========--] 78%  374k docs  $5.51/$10.00  251 docs/s  cache 0%  eta 7m
+```
 
-**3. State must be projected down to what each question needs.**
-Jev suffers documented context rot: *"accuracy falls as the state grows with content unrelated to
-the decision."* But batching forces every question in a call to share one state. Cheap wants one big
-call; accurate wants narrow states. Resolving that tension — grouping questions into calls by the
-state projection they need — is the planner's job.
+### 5. You get three artifacts
 
-### The mistake this design already made
+**`results/cells.parquet`** — one row per (document, question). The distributions are kept, always,
+because throwing them away means re-running the corpus to change your mind about a threshold.
 
-The first version of this plan proposed packing 20 documents into a single state to amortise the
-schema twenty ways, projecting a 10x saving. **That is wrong.** Because one question returns exactly
-one answer about the whole state, per-document answers need per-document questions, so packed and
-unpacked cost *identical* tokens — packing only reduces request count. And it walks directly into
-the documented context-rot failure mode by surrounding each document with nineteen irrelevant ones.
+| doc_id | question_id | type | noul | choice | score | probabilities | confidence | confidence_source |
+|---|---|---|---|---|---|---|---|---|
+| T-1041 | is_urgent | noul | **0.97** | – | – | – | 0.94 | derived |
+| T-1041 | department | choice | – | **billing** | – | `{billing: .91, technical: .06, sales: .03}` | 0.88 | model |
+| T-1041 | frustration | score | – | – | **2.7** | `{"0": .02, "1": .08, "2": .19, "3": .71}` | 0.74 | model |
+| T-1041 | churn_risk | noul | **0.21** | – | – | – | 0.58 | derived |
+| T-1042 | is_urgent | noul | **0.04** | – | – | – | 0.92 | derived |
+| T-1042 | department | choice | – | **technical** | – | `{technical: .83, billing: .11, sales: .06}` | 0.79 | model |
+| T-1043 | churn_risk | noul | **0.96** | – | – | – | 0.92 | derived |
 
-The reasoning is preserved in [`docs/00-API-NOTES.md`](docs/00-API-NOTES.md) §6 so it is not
-reinvented. **One document per call, all questions batched** is the standing rule.
+**`results/validation_report.md`** — how much you may trust each column, measured against labels you
+hand-checked, not asserted.
+
+```
+question        type    accuracy  n     ECE    threshold      coverage   verdict
+is_urgent       noul    0.96      240   —      |p-0.5| > 0.31   94%      PASS
+department      choice  0.93      300   0.031  conf > 0.74      86%      PASS
+churn_risk      noul    0.91      240   —      |p-0.5| > 0.40   71%      PASS
+frustration     score   0.68      200   0.190  —                 —       FAIL — exploratory only
+```
+
+**`results/review_queue.csv`** — the 6% that came back uncertain, for a human, instead of a confident
+wrong answer.
+
+### 6. You use it like any other table
+
+```sql
+SELECT date_trunc('week', created_at) AS week,
+       count(*) FILTER (WHERE is_urgent > 0.8)              AS urgent,
+       count(*) FILTER (WHERE churn_risk > 0.9)             AS at_risk,
+       count(*) FILTER (WHERE department = 'billing')       AS billing
+FROM  labelled
+GROUP BY 1 ORDER BY 1;
+```
+
+Four columns that did not exist an hour ago, on 480,000 rows, for $7. A frontier LLM doing the same
+work costs roughly **$1,600**. A team of humans at two minutes a ticket is about **eight person-years**.
 
 ---
 
-## Intended experience
+## What you provide, what you get
 
-```
-$ cartograph estimate --input hn.parquet --questions hn.yaml
-  5,847,221 documents · 14 questions · 2 call groups
-  unbatched (14 calls/doc):  3.60B tokens   ~$151   
-  batched   (2 calls/doc):   2.28B tokens    ~$96    ← planned
-  schema is 94% of spend — run `cartograph schema-tune` to reduce it
-
-$ cartograph validate --run hn-2026 --gold labels.csv
-  is_show_hn    noul    acc 0.97  n=240  →  |p-0.5|>0.34 covers 94% at 0.99
-  topic         choice  acc 0.91  ECE 0.04  n=300  →  conf>0.80 covers 78% at 0.99
-  tone          score   acc 0.68  ECE 0.19  n=200  →  FAILS gate — exploratory only
-
-$ cartograph run --input hn.parquet --questions hn.yaml --budget 100 --out results/
-  [====------] 41%  2.4M docs  $39.10/$100.00  1,840 docs/s  cache 12%  eta 47m
-```
-
-*Numbers above are illustrative. `cartograph estimate` produces the real ones, and every figure
-published anywhere in this repository must be reproducible by a command in it.*
-
----
-
-## Documents
-
-| Document | What it is | Read when |
-|---|---|---|
-| [`docs/00-API-NOTES.md`](docs/00-API-NOTES.md) | Verified API contract, the derived cost model, model limitations, and why document packing was rejected. | **First.** |
-| [`docs/01-MOTIVATION.md`](docs/01-MOTIVATION.md) | Design drivers, each with its retrofit cost. Anti-goals. Success criteria. | **Second.** |
-| [`docs/02-ARCHITECTURE.md`](docs/02-ARCHITECTURE.md) | Pipeline, stage contracts, data model, failure and recovery model. | Before fixing module boundaries. |
-| [`docs/03-DESIGN.md`](docs/03-DESIGN.md) | Question-set format, call planning, schema economy, cache keys, output schema, CLI. | While implementing a stage. |
-| [`docs/04-AGENT-GUIDE.md`](docs/04-AGENT-GUIDE.md) | Build order, hard rules, testing strategy, traps. | Before the first commit. |
-| [`docs/05-FLAGSHIP.md`](docs/05-FLAGSHIP.md) | The launch analysis: corpus choice, question design, methodology, honesty rules. | Once the engine runs end to end. |
-
----
-
-## Non-goals
-
-Not an agent framework, not a chat wrapper, not a server, not a vector database, not a
-multi-provider abstraction, and it generates no text. It turns a corpus and a question set into a
-calibrated, provenanced table. Each exclusion is justified in `docs/01-MOTIVATION.md`.
-
-## Jev facts, verified 2026-09-19
-
-Re-verify before relying on these. Full detail and citations in `docs/00-API-NOTES.md`.
-
-| | |
+| You provide | You get |
 |---|---|
-| Endpoint | `POST https://api.typesafe.ai/v1/systemone` |
-| Auth | `Authorization: Bearer $TYPESAFE_API_KEY` |
-| Model | `jev-latest`; cookbooks pin explicit versions such as `jev-1.13` |
-| Price | $0.042 / MTok input · output free |
-| Latency | 70–500ms end to end |
-| Context | bounded, ~32k tokens |
-| Request | exactly **one** `state` + a map of questions; all questions see the same state |
-| `noul` | criteria optional · returns a bare probability · **no confidence, no distribution** |
-| `choice` | criteria required · returns choice + distribution + confidence |
-| `score` | ordered levels required · returns weighted score + legend + distribution + confidence |
-| Modality | text only; English primary, other languages lower accuracy |
-| Cannot | generate text, count reliably, do arithmetic, or compare dates |
+| A corpus — Parquet, CSV, JSONL, DuckDB | `cells.parquet` — every answer with its full probability distribution and provenance |
+| A question set — one YAML file | `validation_report.md` — per-question accuracy, calibration, recommended thresholds |
+| A budget ceiling in dollars | `review_queue.csv` — the uncertain rows, for a human |
+| A Jev API key | `manifest.json` — exactly how every number was produced |
 
-## Licence
+---
 
-Apache-2.0, matching the ecosystem norm. Confirm before first publish.
+## Why this isn't a `for` loop around the API
+
+The loop works for 500 rows. Here is what happens at 480,000, and each line is a component of this
+product:
+
+1. **You'd send the ticket four times.** One state per request, and every question in a call sees it.
+   Batching all four questions into one call pays for the ticket once instead of four times — 3.7x
+   cheaper, verified by TypeSafe's own cookbook to return identical answers.
+2. **It will die at row 310,000.** Without checkpointing, resuming means paying twice.
+3. **You'll add a fifth question next week.** Without per-cell caching, that re-runs all five.
+4. **You'll want a different threshold.** Without stored distributions, that's a full re-run.
+5. **You won't know if `frustration` is any good.** It isn't — 0.68 above. Without a validation gate
+   you'd have shipped a dashboard built on it.
+6. **Nothing stops a bug at 3am.** Without a hard budget cap, a retry storm is a surprise invoice.
+
+`census` is the difference between "I called a classifier a lot" and "here is a labelled dataset,
+and here is how accurate each column is."
+
+---
+
+## What it is not
+
+Not an agent, not a chat wrapper, not a server, not a vector database, not a text generator, and not
+a general LLM framework. It turns a corpus and a question set into a calibrated table. Jev does the
+classifying; `census` makes the result trustworthy, affordable and reproducible.
+
+---
+
+## Status
+
+**Design stage. No code yet.** These documents are written for a coding agent to implement directly.
+
+| Document | What it holds |
+|---|---|
+| [`docs/00-JEV-API.md`](docs/00-JEV-API.md) | The verified Jev contract, cost model and documented model limits. Facts, with citations. |
+| [`docs/01-DESIGN.md`](docs/01-DESIGN.md) | Design drivers, architecture, data model, question format, output schema, CLI. |
+| [`docs/02-BUILD-PLAN.md`](docs/02-BUILD-PLAN.md) | The sequenced task list: 8 phases, explicit dependencies, done-when for each task. |
+| [`docs/03-LAUNCH.md`](docs/03-LAUNCH.md) | The flagship public analysis and how it gets published honestly. |
+
+## The name
+
+A census asks a fixed questionnaire of every member of a population and publishes a table, with its
+sampling method and its error bars attached. That is exactly this: a fixed question set, every row, a
+table, and a validation report. It also gives the launch analysis its headline — *a census of
+5.8 million Hacker News posts.*
+
+Licence: Apache-2.0, matching the ecosystem norm.
