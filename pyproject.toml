@@ -1,0 +1,37 @@
+[project]
+name = "jev-census"
+version = "0.1.0"
+description = "Ask the same questions of every row in a dataset, and get back a table — built on TypeSafe's Jev."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "typesafe-sdk>=0.7.0",
+    "pydantic>=2",
+    "pyyaml>=6",
+    "pyarrow>=17",
+    "typer>=0.12",
+    "rich>=13",
+    "python-dotenv>=1.2",
+]
+
+[project.scripts]
+census = "jev_census.cli:app"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
