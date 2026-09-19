@@ -92,3 +92,28 @@ def test_put_overwrites_existing_key(tmp_path):
     assert cache.get(key).answer.noul == 0.1
     assert cache.stats()["cells_cached"] == 1
     cache.close()
+
+
+def test_calibration_ratio_none_before_any_record(tmp_path):
+    cache = CellCache(tmp_path / "cache.db")
+    assert cache.calibration_ratio() is None
+    cache.close()
+
+
+def test_calibration_ratio_accumulates_across_calls(tmp_path):
+    cache = CellCache(tmp_path / "cache.db")
+    cache.record_calibration(estimated_tokens=100, actual_tokens=120)
+    cache.record_calibration(estimated_tokens=200, actual_tokens=220)
+    # cumulative: estimated 300, actual 340 -> ratio ~1.1333
+    ratio = cache.calibration_ratio()
+    assert ratio == (340 / 300)
+    cache.close()
+
+
+def test_calibration_ratio_persists_across_reopen(tmp_path):
+    path = tmp_path / "cache.db"
+    with CellCache(path) as cache:
+        cache.record_calibration(estimated_tokens=100, actual_tokens=150)
+
+    with CellCache(path) as reopened:
+        assert reopened.calibration_ratio() == 1.5

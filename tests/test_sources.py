@@ -82,3 +82,33 @@ def test_read_parquet_is_lazy_across_row_groups(tmp_path):
             w.write_table(pa.Table.from_pylist(batch_rows, schema=schema))
     first_five = list(itertools.islice(read_parquet(path, batch_size=10), 5))
     assert [r["i"] for r in first_five] == [0, 1, 2, 3, 4]
+
+
+def test_count_rows_parquet(tmp_path):
+    from jev_census.sources import count_rows
+
+    path = tmp_path / "tickets.parquet"
+    _write_parquet(path, ROWS)
+    assert count_rows(path) == len(ROWS)
+
+
+def test_count_rows_csv(tmp_path):
+    from jev_census.sources import count_rows
+
+    path = tmp_path / "tickets.csv"
+    _write_csv(path, ROWS)
+    assert count_rows(path) == len(ROWS)
+
+
+def test_count_rows_parquet_does_not_read_data(tmp_path, monkeypatch):
+    """Row count comes from Parquet metadata alone - no row-group scan."""
+    from jev_census.sources import count_rows
+
+    path = tmp_path / "tickets.parquet"
+    _write_parquet(path, ROWS)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("iter_batches should not be called for a metadata-only row count")
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", fail_if_called)
+    assert count_rows(path) == len(ROWS)

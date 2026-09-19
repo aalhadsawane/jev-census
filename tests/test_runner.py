@@ -5,7 +5,9 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 
+from jev_census.normalizer import normalize
 from jev_census.runner import RunConfig, RunnerError, run_census
+from jev_census.sources import read_source
 from tests.fakes import FakeJevClient
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -153,3 +155,74 @@ def test_budget_cap_stops_admitting_new_calls(tmp_path):
     assert result.budget_exhausted is True
     assert result.documents_processed == 0
     assert result.spent_usd == 0.0
+
+
+def test_accounting_matches_summed_usage_input_tokens_exactly(tmp_path):
+    """T3.3 done-when: accounting matches summed usage.input_tokens exactly."""
+    config = _config(tmp_path, FIXTURES / "support-triage.yaml")
+    client = FakeJevClient()
+    result = run_census(config, client)
+
+    expected_total_tokens = sum(50 + 20 * len(question_ids) for _state, question_ids in client.calls)
+    assert result.total_input_tokens_charged == expected_total_tokens
+
+
+def test_decode_failure_still_charges_the_attempt(tmp_path):
+    """T3.3: a response that fails to decode still cost real input tokens -
+    the attempt is charged, not just successes."""
+    config = _config(tmp_path, FIXTURES / "support-triage.yaml")
+    first_doc = next(iter(normalize(read_source(config.input_path), id_field="ticket_id")))
+    projection_state = {"subject": first_doc.fields["subject"], "body": first_doc.fields["body"]}
+
+    client = FakeJevClient(drop_answer_for_state=projection_state)
+    result = run_census(config, client)
+
+    assert result.documents_skipped == 1
+    assert result.total_input_tokens_charged > 0  # the failed attempt was still charged
+    # its tokens are part of the total even though no cells were written for it
+    expected_total_tokens = sum(50 + 20 * len(question_ids) for _state, question_ids in client.calls)
+    assert result.total_input_tokens_charged == expected_total_tokens
+
+
+def test_admission_control_projects_next_call_before_admitting(tmp_path):
+    """T3.4: admission is based on spent + projected, not just spent-so-far -
+    a budget too small for even one call must stop before making it."""
+    config = _config(tmp_path, FIXTURES / "support-triage.yaml", budget_usd=0.000001)
+    client = FakeJevClient()
+    result = run_census(config, client)
+
+    assert client.call_count == 0
+    assert result.budget_exhausted is True
+    assert result.total_input_tokens_charged == 0
+
+
+def test_calibration_ratio_recorded_after_real_calls(tmp_path):
+    """T3.5: the run summary exposes the actual/estimated calibration ratio."""
+    config = _config(tmp_path, FIXTURES / "support-triage.yaml")
+    result = run_census(config, FakeJevClient())
+
+    assert result.calibration_ratio is not None
+    assert result.calibration_ratio > 0
+
+
+def test_calibration_ratio_none_when_fully_cached(tmp_path):
+    """A fully-cached rerun makes no real calls; calibration_ratio still
+    reflects the shared cache.db's cumulative record, not reset per run."""
+    questions_path = FIXTURES / "support-triage.yaml"
+    corpus = _corpus(tmp_path)
+    census_dir = tmp_path / ".census"
+
+    config1 = RunConfig(
+        input_path=corpus, questions_path=questions_path, budget_usd=10.0,
+        out_dir=tmp_path / "results1", census_dir=census_dir, id_field="ticket_id",
+    )
+    run_census(config1, FakeJevClient())
+
+    config2 = RunConfig(
+        input_path=corpus, questions_path=questions_path, budget_usd=10.0,
+        out_dir=tmp_path / "results2", census_dir=census_dir, id_field="ticket_id",
+    )
+    result2 = run_census(config2, FakeJevClient())
+
+    assert result2.cache_misses == 0
+    assert result2.calibration_ratio is not None

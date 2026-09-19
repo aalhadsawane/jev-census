@@ -44,12 +44,20 @@ def _read_run_id(census_dir: Path) -> str:
 
 
 def _rows_without_provenance(path: Path) -> set[tuple]:
-    """Compare on everything except call_id/run_id/ts, which legitimately
-    differ between two separate runs of the same corpus. probabilities/legend
-    come back as lists of (key, value) pairs (map columns) rather than plain
-    dicts, so they're JSON-canonicalized to stay hashable for set comparison."""
+    """Compare on everything except call/run-batch provenance, which
+    legitimately differs between two separate runs of the same corpus:
+    call_id/run_id/ts obviously, but also input_tokens — it's the *whole
+    call's* token count, duplicated onto every cell that call answered
+    (writer.py), and a resumed run's calls are batched differently than a
+    clean run's (partial cache hits split a document's remaining questions
+    into a smaller follow-up call). Two runs computing identical decisions
+    via differently-sized batches will legitimately report different
+    input_tokens per cell without the underlying answer differing at all.
+    probabilities/legend come back as lists of (key, value) pairs (map
+    columns) rather than plain dicts, so they're JSON-canonicalized to stay
+    hashable for set comparison."""
     table = pq.read_table(path)
-    keep = [c for c in table.column_names if c not in {"call_id", "run_id", "ts"}]
+    keep = [c for c in table.column_names if c not in {"call_id", "run_id", "ts", "input_tokens"}]
     rows = table.select(keep).to_pylist()
     return {
         tuple(sorted((k, json.dumps(v, sort_keys=True, default=str)) for k, v in row.items()))
