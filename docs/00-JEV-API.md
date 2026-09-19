@@ -8,7 +8,86 @@ fixed in the same commit.
 
 ---
 
-## Request
+## Access path (current)
+
+TypeSafe's native endpoint below is **early access, not available to us yet.** We reach Jev through
+**Vercel AI Gateway's evaluation modality** instead — a promo this week waives the charge but not
+account verification (a card on file is required regardless). Verified live 2026-09-19 against the
+real API; every number below is from an actual response, not a doc.
+
+```ts
+import { experimental_evaluate as evaluate } from "ai"; // "ai" >= 7.0.0
+
+const result = await evaluate({
+  model: "typesafe-ai/jev",
+  state: "The support agent issued a full refund to the customer.",
+  questions: {
+    refunded: { type: "boolean", instructions: "Was a refund issued?" },
+  },
+});
+```
+
+`AI_GATEWAY_API_KEY` in the environment is all that's needed — no separate model import. Confirmed
+live call, verbatim:
+
+```json
+{
+  "answers": { "refunded": { "type": "boolean", "probability": 0.99 } },
+  "usage": { "inputTokens": 282, "outputTokens": 21, "totalTokens": 303 },
+  "rounding": { "probabilityDecimals": 2, "scoreDecimals": 2 },
+  "providerMetadata": {
+    "typesafe": { "confidence": {} },
+    "gateway": { "cost": "0", "marketCost": "0.000011844" }
+  }
+}
+```
+
+Confirmed by this and a second live call (`build failed, exit code 1` → `probability: 0.01`, matching
+Vercel's own docs example exactly):
+
+- **Naming shift at this layer.** `noul` → `type: "boolean"`, the value key is `probability` not
+  `noul`. Semantics unchanged — still P(yes/true), still no distribution.
+- **`confidence` for a boolean answer is an empty object**, confirming the native docs: noul/boolean
+  carries none. `providerMetadata.typesafe.confidence` is where confidence would live for choice/score
+  (unconfirmed live — see below).
+- **Pricing checks out exactly.** `marketCost` for 282 input tokens = `0.000011844` =
+  `282 × 0.000000042`. Matches the $0.042/MTok figure to five decimal places, independent of
+  TypeSafe's own docs. `cost: "0"` is the promo waiving that charge — a separate field from
+  `marketCost`, which is what it would normally bill.
+- **`outputTokens` is nonzero (21) even though output is priced at $0.** Tokens are counted and
+  reported; only billing is zero.
+- **Results are rounded to 2 decimals** (`rounding` block on every response), as the TypeSafe
+  provider docs describe.
+
+**Not yet confirmed live** — `choice`, `score`, a mixed-type batch on one state, and structured
+(object) state. The test script (`jev-eval.ts` in the implementation repo) covers all of these; it
+hit the constraint below before finishing the sweep.
+
+### The free tier is aggressively rate-limited — this matters for the whole cost plan
+
+Two calls succeeded, then every subsequent call failed with `429 rate_limit_exceeded`: *"Free tier
+requests on this model are rate-limited."* Waiting 8 seconds between calls did not clear it, meaning
+the window is longer than seconds — minutes, hours, or a daily quota, not determined. **No
+`Retry-After` header or reset time is exposed anywhere in the error response.**
+
+This directly threatens the flagship analysis (`03-LAUNCH.md`), which assumes hundreds of thousands
+to millions of calls. Until the real limit is known, assume the free promo supports **connectivity
+testing and small samples only** — not a corpus-scale run. Vercel's error names the fix: "Upgrade to
+paid credits." Whether to do that, and when, is a cost decision for the project owner, not something
+to do unprompted.
+
+### For later: the direct-to-TypeSafe path (early access, not yet available)
+
+`@ai-sdk/typesafe-ai` (real package, confirmed on npm, published by `vercel-release-bot`) gives the
+same `evaluate()` shape but talks straight to `api.typesafe.ai` with a `TYPESAFE_AI_API_KEY`, no
+Gateway involved. Same three primitives, explicitly documented limits — `choice`: 1–255 options,
+`score`: 2–10 levels — and confidence for choice/score lives at
+`result.providerMetadata.typesafe.confidence[questionId]`. Worth switching to once early access opens,
+since it removes both the Gateway's rate limit and the Vercel billing dependency. Not usable today.
+
+---
+
+## Request (native endpoint — early access, not currently reachable)
 
 ```http
 POST https://api.typesafe.ai/v1/systemone

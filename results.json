@@ -1,0 +1,32 @@
+[
+  {
+    "name": "boolean (no criteria)",
+    "ok": false,
+    "error": "Failed after 3 attempts. Last error: GatewayRateLimitError: Free tier requests on this model are rate-limited. Upgrade to paid credits at https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dtop-up for unrestricted access."
+  },
+  {
+    "name": "boolean (with criteria)",
+    "ok": false,
+    "error": "Failed after 3 attempts. Last error: GatewayRateLimitError: Free tier requests on this model are rate-limited. Upgrade to paid credits at https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dtop-up for unrestricted access."
+  },
+  {
+    "name": "choice",
+    "ok": false,
+    "error": "Failed after 3 attempts. Last error: GatewayRateLimitError: Free tier requests on this model are rate-limited. Upgrade to paid credits at https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dtop-up for unrestricted access."
+  },
+  {
+    "name": "score",
+    "ok": false,
+    "error": "Failed after 3 attempts. Last error: GatewayRateLimitError: Free tier requests on this model are rate-limited. Upgrade to paid credits at https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dtop-up for unrestricted access."
+  },
+  {
+    "name": "multi-question batch (boolean x2 + score, one state)",
+    "ok": false,
+    "error": "Failed after 3 attempts. Last error: GatewayRateLimitError: Free tier requests on this model are rate-limited. Upgrade to paid credits at https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dtop-up for unrestricted access."
+  },
+  {
+    "name": "structured (object) state",
+    "ok": false,
+    "error": "Failed after 3 attempts. Last error: GatewayRateLimitError: Free tier requests on this model are rate-limited. Upgrade to paid credits at https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dtop-up for unrestricted access."
+  }
+]
