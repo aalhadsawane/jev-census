@@ -1,0 +1,20 @@
+# secrets
+.env
+.env.local
+.env.*.local
+
+# node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# python (for the future census engine)
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# data / local run state
+.census/
+results/
+*.parquet
