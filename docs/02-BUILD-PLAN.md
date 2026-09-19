@@ -15,20 +15,36 @@ cents to observe it.
 
 ## Phase map
 
-| Phase | Delivers | Exit criteria | Est. |
-|---|---|---|---|
-| **P0 Verify** | Confirmed API facts | Every claim in `00-JEV-API.md` confirmed or corrected, with evidence committed | 0.5 day |
-| **P1 Skeleton** | 100 rows in → correct Parquet out | End-to-end run, all three question types, full provenance | 2 days |
-| **P2 Durability** | Survives interruption | `kill -9` + resume is identical to a clean run | 2 days |
-| **P3 Cost** | Knows the price before spending | `estimate` within 10% of actual | 1.5 days |
-| **P4 Scale** | Runs a real corpus | 100k+ rows unattended without intervention | 2 days |
-| **P5 Planner** | Projections and grouping | Two projections produce two calls per document | 1 day |
-| **P6 Quality** | Trustworthy columns | Validation report with per-question accuracy | 3 days |
-| **P7 Adoption** | Installable and demoable | Clean clone → labelled results in 5 min | 2 days |
-| **P8 Launch** | Public analysis | Published with methodology and raw data | 3 days |
+| Phase | Delivers | Exit criteria | Est. | Status |
+|---|---|---|---|---|
+| **P0 Verify** | Confirmed API facts | Every claim in `00-JEV-API.md` confirmed or corrected, with evidence committed | 0.5 day | ✅ done |
+| **P1 Skeleton** | 100 rows in → correct Parquet out | End-to-end run, all three question types, full provenance | 2 days | ✅ done |
+| **P2 Durability** | Survives interruption | `kill -9` + resume is identical to a clean run | 2 days | ✅ done |
+| **P3 Cost** | Knows the price before spending | `estimate` within 10% of actual | 1.5 days | ✅ done |
+| **P4 Scale** | Runs a real corpus | 100k+ rows unattended without intervention | 2 days | ✅ done |
+| **P5 Planner** | Projections and grouping | Two projections produce two calls per document | 1 day | next |
+| **P6 Quality** | Trustworthy columns | Validation report with per-question accuracy | 3 days | |
+| **P7 Adoption** | Installable and demoable | Clean clone → labelled results in 5 min | 2 days | |
+| **P8 Launch** | Public analysis | Published with methodology and raw data | 3 days | |
 
 Roughly three weeks of evenings. P6 is the phase that makes this a portfolio project rather than a
 script; P8 is the phase that makes it visible. Neither works without P1–P5.
+
+**The task tables below stay the index.** P0–P4 were built directly from them and the tables were
+enough, because those phases build machinery with obvious right answers. P5–P8 have open design
+decisions inside almost every task — how to id a projection, how to weight a stratified sample, what
+`confidence_source` means on an aggregated cell — so each has an elaborated spec that makes those
+decisions rather than leaving them to be re-derived:
+
+| Phase | Spec | Holds |
+|---|---|---|
+| P5 | [`04-P5-PLANNER.md`](04-P5-PLANNER.md) | Call groups, projection ids, context limit, chunking and per-type aggregation |
+| P6 | [`05-P6-QUALITY.md`](05-P6-QUALITY.md) | Stratification and reweighting, accuracy/ECE/threshold statistics, report format, schema-tune |
+| P7 | [`06-P7-ADOPTION.md`](06-P7-ADOPTION.md) | Packaging traps, the bundled demo, example sets, executable recipes, README provenance |
+| P8 | [`07-P8-EXECUTION.md`](07-P8-EXECUTION.md) | Run order and publication gates for the launch analysis (the *why* stays in `03-LAUNCH.md`) |
+
+Read a phase's spec before starting its tasks. Where a spec says "decisions already made", they are
+made — reopen one only with a reason worth writing into `DECISIONS.md`.
 
 ---
 
@@ -122,15 +138,18 @@ more than one in-flight call.
 
 ## P5 — Planner and projections
 
+Spec: [`04-P5-PLANNER.md`](04-P5-PLANNER.md).
+
 | ID | Task | Depends | Done when |
 |---|---|---|---|
-| T5.1 | `projection` in the question schema, with defaults | T1.1 | Per-question override parses |
+| T5.1 | `projection` in the question schema, with defaults | T1.1 | Per-question override parses; a typo'd field aborts on document 1 instead of sending `null` |
 | T5.2 | Grouping by projection; `CallGroup` construction | T5.1 | Deterministic, unit-tested, no network |
-| T5.3 | Group-count reporting in `estimate` and `run` | T5.2, T3.2 | Prints `N questions · M call groups · state sent Mx per document` |
-| T5.4 | Long-document chunking and per-type aggregation | T1.7 | `chunk_count` set; aggregated cells excluded from validation samples |
+| T5.2b | **Verify the real context limit against the live API** | T5.2 | `CONTEXT_LIMIT_TOKENS` set from observation; `00-JEV-API.md` updated in the same commit |
+| T5.3 | Group-count reporting in `estimate` and `run` | T5.2, T3.2 | Prints `N questions · M call groups · state sent Mx per document`; single-group output unchanged |
+| T5.4 | Long-document chunking and per-type aggregation | T1.7, T5.2b | `chunk_count` set; aggregated cells marked `confidence_source=derived` and excluded from validation samples |
 
 **Exit:** a two-projection question set produces two calls per document, each state carrying only its
-group's fields.
+group's fields — asserted by the *absence* of the other group's fields, not by call count alone.
 
 ---
 
@@ -138,15 +157,20 @@ group's fields.
 
 This phase is what separates the project from a script. Do not compress it.
 
+Spec: [`05-P6-QUALITY.md`](05-P6-QUALITY.md). Read it before T6.1 — the sampling weights it defines
+are load-bearing for every statistic in T6.2–T6.4, and a report built without them looks correct and
+is not.
+
 | ID | Task | Depends | Done when |
 |---|---|---|---|
-| T6.1 | `census label`: stratified sample across the probability range | T2.1 | Sample is not uniform; strata reported |
-| T6.2 | Accuracy scoring against a gold CSV, with sample size and interval | T6.1 | Per question, never aggregated across types |
-| T6.3 | Expected calibration error + reliability diagram data | T6.2 | Choice and score only; noul handled on its own scale |
-| T6.4 | Per-question, per-type threshold recommendation with coverage | T6.3 | Noul thresholds on distance-from-0.5; never reused across types |
-| T6.5 | `validation_report.md` generator with pass/fail against `gate` | T6.4 | Reproduces the README's report block |
-| T6.6 | Review queue export + human-answer re-import as a separate override layer | T6.4 | Overrides never merged into model output columns |
-| T6.7 | `census schema-tune`: variant evaluation, per-type agreement, cost delta | T6.2, T3.2 | Produces a real accuracy-vs-verbosity curve, committed |
+| T6.1 | `census label`: stratified sample across the probability range | T2.1 | Sample is not uniform; strata and per-stratum weights written into the labelling CSV |
+| T6.2 | Accuracy scoring against a gold CSV, with sample size and interval | T6.1 | Per question, never aggregated across types; weighted by stratum, Wilson interval on Kish `n_eff` |
+| T6.3 | Expected calibration error + reliability diagram data | T6.2 | Choice and score on model confidence; noul on its own probability scale, in a separate field |
+| T6.4 | Per-question, per-type threshold recommendation with coverage | T6.3 | Noul thresholds on distance-from-0.5; never reused across types; minimum-surviving-sample guard |
+| T6.5 | `validation_report.md` generator with pass/fail against `gate` | T6.4 | Reproduces the README's report block; non-zero exit only when a `strict` question fails |
+| T6.6 | Review queue export + human-answer re-import as a separate override layer | T6.4 | Overrides never merged into model output columns — asserted by byte-identity of `cells.parquet` |
+| T6.7 | `census schema-tune`: variant evaluation, per-type agreement, cost delta | T6.2, T3.2 | Produces a real accuracy-vs-verbosity curve, committed. Closes open question **H** |
+| T6.8 | **Projection ablation: projected vs full-record state on the same question** | T6.2 | Closes open question **I**, which `00-JEV-API.md` already assigns to this phase |
 
 **Exit:** every published column has a measured accuracy behind it. T6.7's curve is the most
 publishable artifact in the repository — nobody in the Jev ecosystem has measured it.
@@ -154,6 +178,8 @@ publishable artifact in the repository — nobody in the Jev ecosystem has measu
 ---
 
 ## P7 — Adoption
+
+Spec: [`06-P7-ADOPTION.md`](06-P7-ADOPTION.md).
 
 | ID | Task | Depends | Done when |
 |---|---|---|---|
@@ -169,7 +195,8 @@ publishable artifact in the repository — nobody in the Jev ecosystem has measu
 
 ## P8 — Launch
 
-Full detail in `03-LAUNCH.md`. Do not start before P6.
+Strategy in [`03-LAUNCH.md`](03-LAUNCH.md); run order and publication gates in
+[`07-P8-EXECUTION.md`](07-P8-EXECUTION.md). Do not start before P6.
 
 | ID | Task | Depends | Done when |
 |---|---|---|---|

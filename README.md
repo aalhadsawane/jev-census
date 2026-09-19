@@ -199,7 +199,12 @@ classifying; `census` makes the result trustworthy, affordable and reproducible.
 
 ## Status
 
-**Design stage. No code yet.** These documents are written for a coding agent to implement directly.
+**Engine built, quality phase next.** Phases P0–P4 are complete and merged: `census run` and
+`census estimate` work end to end against the live API, survive `kill -9` and `SIGINT`, cache at cell
+granularity, cap spend in integer micro-dollars, and have run 120,000 documents unattended. P5–P8 —
+projections, the validation report, packaging and the launch analysis — are specified and not yet
+built, so the figures above are still design projections rather than measured numbers. P7 replaces
+each of them with output from a command in this README.
 
 | Document | What it holds |
 |---|---|
@@ -207,6 +212,11 @@ classifying; `census` makes the result trustworthy, affordable and reproducible.
 | [`docs/01-DESIGN.md`](docs/01-DESIGN.md) | Design drivers, architecture, data model, question format, output schema, CLI. |
 | [`docs/02-BUILD-PLAN.md`](docs/02-BUILD-PLAN.md) | The sequenced task list: 8 phases, explicit dependencies, done-when for each task. |
 | [`docs/03-LAUNCH.md`](docs/03-LAUNCH.md) | The flagship public analysis and how it gets published honestly. |
+| [`docs/04-P5-PLANNER.md`](docs/04-P5-PLANNER.md) | P5 spec: call groups, projection ids, context limit, chunking and aggregation. |
+| [`docs/05-P6-QUALITY.md`](docs/05-P6-QUALITY.md) | P6 spec: stratified sampling, accuracy and calibration statistics, thresholds, schema-tune. |
+| [`docs/06-P7-ADOPTION.md`](docs/06-P7-ADOPTION.md) | P7 spec: packaging, the bundled demo, example question sets, executable recipes. |
+| [`docs/07-P8-EXECUTION.md`](docs/07-P8-EXECUTION.md) | P8 spec: run order and the gates every published claim has to clear. |
+| [`DECISIONS.md`](DECISIONS.md) | Divergences from the documents above, and why. Newest first. |
 
 ## The name
 
