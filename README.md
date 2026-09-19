@@ -1,4 +1,4 @@
-# census
+# jev-census
 
 **Ask the same questions of every row in a dataset, and get back a table.**
 
@@ -136,6 +136,28 @@ work costs roughly **$1,600**. A team of humans at two minutes a ticket is about
 
 ---
 
+## Why Jev, specifically
+
+Jev is not an implementation detail here — the product only exists because of what this model does
+differently, and every design decision downstream traces back to one of these properties.
+
+| Jev property | What it makes possible |
+|---|---|
+| **Typed decisions, not text** — you predefine the classes and it picks among them | No JSON prompting, no parsing layer, nothing to validate. A malformed answer is not a failure mode that exists |
+| **Calibrated probabilities on every answer** | The `validation_report.md` above. You can measure how much to trust a column and set a threshold from data instead of hope |
+| **$0.042/MTok in, output free** | 480,000 tickets for $7. At frontier-LLM prices this table costs $1,600 and stops being worth making |
+| **70–500ms** | Half an hour for the corpus, not a weekend |
+| **One state, many questions, scored independently** | Ask 20 questions for barely more than 1 — verified by TypeSafe's own cookbook at 12.2x cheaper with identical answers |
+
+And the constraints matter just as much. Jev **cannot generate text**, cannot count, cannot do
+arithmetic, reads instructions literally, and loses accuracy as irrelevant context grows. Those limits
+are why this tool looks the way it does: fixed question sets instead of prompts, code holding all
+control flow, narrow state projections, and a validation gate before anything gets published.
+
+Full contract and documented limits: [`docs/00-JEV-API.md`](docs/00-JEV-API.md).
+
+---
+
 ## What you provide, what you get
 
 | You provide | You get |
@@ -188,9 +210,15 @@ classifying; `census` makes the result trustworthy, affordable and reproducible.
 
 ## The name
 
-A census asks a fixed questionnaire of every member of a population and publishes a table, with its
-sampling method and its error bars attached. That is exactly this: a fixed question set, every row, a
+A census asks a fixed questionnaire of every member of a population and publishes a table with its
+sampling method and error bars attached. That is exactly this: a fixed question set, every row, a
 table, and a validation report. It also gives the launch analysis its headline — *a census of
 5.8 million Hacker News posts.*
+
+The `jev-` prefix is deliberate. Jev is what makes the product possible, and in an ecosystem this
+young the model's name is also how people find the tool.
+
+- Repository and package: **`jev-census`** — `pip install jev-census`
+- Command: **`census`** — short enough to type in the examples above
 
 Licence: Apache-2.0, matching the ecosystem norm.

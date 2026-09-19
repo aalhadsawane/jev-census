@@ -157,7 +157,7 @@ publishable artifact in the repository — nobody in the Jev ecosystem has measu
 
 | ID | Task | Depends | Done when |
 |---|---|---|---|
-| T7.1 | Package with `uv`; `pip install census` works from a clean venv | P6 | Installs and runs on a machine that never had the source |
+| T7.1 | Package with `uv`; `pip install jev-census` works from a clean venv | P6 | Installs and runs on a machine that never had the source |
 | T7.2 | One-command demo on a small public dataset, bundled question set | T7.1 | Clean clone → labelled results in under 5 minutes |
 | T7.3 | Example question sets for 3 common corpora | T7.2 | Each has a committed validation report |
 | T7.4 | DuckDB recipe docs: long→wide, thresholding, time series | T7.1 | Copy-pasteable against the demo output |
