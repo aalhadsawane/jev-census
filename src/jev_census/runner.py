@@ -92,6 +92,10 @@ class RunResult:
     # this run (and every prior run sharing this cache.db). None if no real
     # call was made (e.g. a fully-cached rerun, or budget 0 before any call).
     calibration_ratio: float | None
+    # T4.4: True only when the Scheduler (scheduler.py) stopped because of a
+    # SIGINT, not a budget breach. The sequential runner (this module) never
+    # installs a signal handler, so it's always False here.
+    interrupted: bool = False
 
 
 def _questionset_diff(old_body_hashes: dict[str, str], question_set: QuestionSet) -> str:

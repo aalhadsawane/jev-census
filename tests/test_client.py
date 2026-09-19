@@ -5,7 +5,13 @@ import httpx2  # typesafe_sdk's own vendored httpx package, used for its Headers
 import pytest
 import typesafe_sdk as sdk
 
-from jev_census.client import JevClient, JevConfigError, JevTransientError, to_sdk_question
+from jev_census.client import (
+    AsyncJevClient,
+    JevClient,
+    JevConfigError,
+    JevTransientError,
+    to_sdk_question,
+)
 from jev_census.question_set import Question
 
 _HEADERS = httpx2.Headers({})
@@ -13,6 +19,10 @@ _HEADERS = httpx2.Headers({})
 
 def _client() -> JevClient:
     return JevClient(api_key="test-key-not-real")
+
+
+def _async_client() -> AsyncJevClient:
+    return AsyncJevClient(api_key="test-key-not-real")
 
 
 def _instantiate(exc_cls: type[Exception]) -> Exception:
@@ -118,3 +128,37 @@ def test_client_construction_does_not_touch_network():
     """Constructing the client must not require a live connection — it only
     configures the SDK's HTTP client lazily."""
     _client()
+
+
+@pytest.mark.parametrize(
+    "exc_cls",
+    [sdk.TypeSafeAuthenticationError, sdk.TypeSafeUnprocessableEntityError],
+)
+async def test_async_client_config_errors_classified_as_fatal(exc_cls, monkeypatch):
+    client = _async_client()
+
+    async def raiser(*args, **kwargs):
+        raise _instantiate(exc_cls)
+
+    monkeypatch.setattr(client._client, "system_one", raiser)
+    with pytest.raises(JevConfigError):
+        await client.ask("state", {"q": Question(id="q", type="noul", instructions="It is true.")})
+
+
+@pytest.mark.parametrize(
+    "exc_cls",
+    [sdk.TypeSafeRateLimitError, sdk.TypeSafeInternalServerError],
+)
+async def test_async_client_transient_errors_classified_as_retryable(exc_cls, monkeypatch):
+    client = _async_client()
+
+    async def raiser(*args, **kwargs):
+        raise _instantiate(exc_cls)
+
+    monkeypatch.setattr(client._client, "system_one", raiser)
+    with pytest.raises(JevTransientError):
+        await client.ask("state", {"q": Question(id="q", type="noul", instructions="It is true.")})
+
+
+def test_async_client_construction_does_not_touch_network():
+    _async_client()
