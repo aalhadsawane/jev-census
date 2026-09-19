@@ -1,0 +1,142 @@
+[
+  {
+    "name": "noul (no criteria)",
+    "ok": true,
+    "result": {
+      "model": "jev-1.13.0",
+      "usage": {
+        "input_tokens": 282,
+        "output_tokens": 21
+      },
+      "answers": {
+        "refunded": {
+          "type": "noul",
+          "noul": 0.99
+        }
+      }
+    }
+  },
+  {
+    "name": "noul (with criteria)",
+    "ok": true,
+    "result": {
+      "model": "jev-1.13.0",
+      "usage": {
+        "input_tokens": 305,
+        "output_tokens": 20
+      },
+      "answers": {
+        "passed": {
+          "type": "noul",
+          "noul": 0.01
+        }
+      }
+    }
+  },
+  {
+    "name": "choice",
+    "ok": true,
+    "result": {
+      "model": "jev-1.13.0",
+      "usage": {
+        "input_tokens": 331,
+        "output_tokens": 38
+      },
+      "answers": {
+        "route": {
+          "type": "choice",
+          "choice": "billing",
+          "confidence": 1.0,
+          "probabilities": {
+            "billing": 1.0,
+            "shipping": 0.0,
+            "technical": 0.0
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "score",
+    "ok": true,
+    "result": {
+      "model": "jev-1.13.0",
+      "usage": {
+        "input_tokens": 340,
+        "output_tokens": 17
+      },
+      "answers": {
+        "quality": {
+          "type": "score",
+          "score": 2.92,
+          "confidence": 0.92,
+          "legend": {
+            "0": "poor: no tests or docs",
+            "1": "fair: partial coverage",
+            "2": "good: tests and docs",
+            "3": "excellent: tests, docs, and clear rationale"
+          },
+          "probabilities": {
+            "0": 0.0,
+            "1": 0.0,
+            "2": 0.07,
+            "3": 0.93
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "multi-question batch (noul x2 + score, one state)",
+    "ok": true,
+    "result": {
+      "model": "jev-1.13.0",
+      "usage": {
+        "input_tokens": 336,
+        "output_tokens": 55
+      },
+      "answers": {
+        "authIssue": {
+          "type": "noul",
+          "noul": 0.97
+        },
+        "wantsRefund": {
+          "type": "noul",
+          "noul": 0.99
+        },
+        "urgency": {
+          "type": "score",
+          "score": 1.59,
+          "confidence": 0.39,
+          "legend": {
+            "0": "low",
+            "1": "medium",
+            "2": "high"
+          },
+          "probabilities": {
+            "0": 0.0,
+            "1": 0.4,
+            "2": 0.6
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "structured (object) state",
+    "ok": true,
+    "result": {
+      "model": "jev-1.13.0",
+      "usage": {
+        "input_tokens": 314,
+        "output_tokens": 21
+      },
+      "answers": {
+        "refunded": {
+          "type": "noul",
+          "noul": 0.99
+        }
+      }
+    }
+  }
+]

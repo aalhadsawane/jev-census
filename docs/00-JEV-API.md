@@ -1,122 +1,89 @@
 # 00 — Jev API: verified facts
 
 Transcribed 2026-09-19 from `docs.typesafe.ai`: `/api.md`, `/concepts/state`, `/confidence`,
-`/cookbooks/parallel_questions`, `/model-jaggedness/jev-1.13`.
+`/cookbooks/parallel_questions`, `/model-jaggedness/jev-1.13`. Access path confirmed live 2026-09-20.
 
 **Re-verify before implementing.** Where the live API disagrees, the API wins and this file gets
 fixed in the same commit.
 
 ---
 
-## Access path (current)
+## Access path (current): direct API, confirmed working end to end
 
-TypeSafe's native endpoint below is **early access, not available to us yet.** We reach Jev through
-**Vercel AI Gateway's evaluation modality** instead — a promo this week waives the charge but not
-account verification (a card on file is required regardless). Verified live 2026-09-19 against the
-real API; every number below is from an actual response, not a doc.
+TypeSafe granted API access 2026-09-20. We call `api.typesafe.ai` directly with the official
+`typesafe-sdk` Python package — no gateway, no middleman. All 6 planned contract cases succeeded live
+against this path (`noul` × 2, `choice`, `score`, a mixed-type batch, structured object state) with no
+rate limiting encountered.
 
-```ts
-import { experimental_evaluate as evaluate } from "ai"; // "ai" >= 7.0.0
+```python
+from typesafe_sdk import TypeSafeClient, Noul
 
-const result = await evaluate({
-  model: "typesafe-ai/jev",
-  state: "The support agent issued a full refund to the customer.",
-  questions: {
-    refunded: { type: "boolean", instructions: "Was a refund issued?" },
-  },
-});
+client = TypeSafeClient(model="jev-latest")  # reads TYPESAFE_API_KEY from the environment
+result = client.system_one(
+    "The support agent issued a full refund to the customer.",
+    questions={"refunded": Noul(instructions="Was a refund issued?")},
+)
 ```
 
-`AI_GATEWAY_API_KEY` in the environment is all that's needed — no separate model import. Confirmed
-live call, verbatim:
+Confirmed live response, verbatim (`model` resolves the `jev-latest` alias to the concrete version
+actually used — useful for provenance, per D9):
 
 ```json
 {
-  "answers": { "refunded": { "type": "boolean", "probability": 0.99 } },
-  "usage": { "inputTokens": 282, "outputTokens": 21, "totalTokens": 303 },
-  "rounding": { "probabilityDecimals": 2, "scoreDecimals": 2 },
-  "providerMetadata": {
-    "typesafe": { "confidence": {} },
-    "gateway": { "cost": "0", "marketCost": "0.000011844" }
-  }
+  "model": "jev-1.13.0",
+  "usage": { "input_tokens": 282, "output_tokens": 21 },
+  "answers": { "refunded": { "type": "noul", "noul": 0.99 } }
 }
 ```
 
-Confirmed live, 5 of 6 planned cases (`choice`, `score`, a 3-question mixed-type batch, and a second
-boolean all succeeded; structured object state did not — see below):
+All three types, confirmed live and matching the documented contract exactly:
 
-**Choice** — `state: "My card was charged twice for one order."`, options billing/shipping/technical:
 ```json
-{ "type": "choice", "choice": "billing", "probabilities": { "billing": 1, "technical": 0, "shipping": 0 } }
+// choice — confidence lives directly on the answer, not in provider metadata
+{ "type": "choice", "choice": "billing", "confidence": 1.0,
+  "probabilities": { "billing": 1.0, "shipping": 0.0, "technical": 0.0 } }
+
+// score — legend and confidence both on the answer
+{ "type": "score", "score": 2.92, "confidence": 0.92,
+  "legend": { "0": "poor: no tests or docs", "1": "fair: partial coverage",
+              "2": "good: tests and docs", "3": "excellent: tests, docs, and clear rationale" },
+  "probabilities": { "0": 0.0, "1": 0.0, "2": 0.07, "3": 0.93 } }
 ```
-`providerMetadata.typesafe.confidence` was `{ "route": 1 }` — **choice does carry confidence**, but it
-lives in `providerMetadata`, not on the answer itself.
 
-**Score** — rating a PR description against 4 ordered levels:
-```json
-{ "type": "score", "score": 2.93, "probabilities": { "0": 0, "1": 0, "2": 0.06, "3": 0.9400000000000001 } }
-```
-`confidence: { "quality": 0.93 }`. Note the float artifact on `0.94` — real floating-point noise from
-summed rounded probabilities, not a formatting bug. **Never compare a `score` probability for equality;
-round before comparing or displaying.**
+- **`noul` answers carry no `confidence` key at all** — not null, not absent-with-a-placeholder,
+  simply not present on the object. `choice` and `score` always carry one. That presence check, not
+  the answer `type`, is the right thing for a decoder to branch on.
+- **Batching confirmed with no accuracy cost.** A 3-question batch (2 `noul` + 1 `score`) on one state
+  returned all three correctly in one round trip, and only the `score` question carried a
+  `confidence` key — the two `noul` answers simply omit it, same rule as above applied per-question
+  inside a batch.
+- **Structured (object) state works exactly as documented** — `{"order": {...}, "agent": "bot-7"}` in,
+  correct answer out. This was the one case never confirmed during earlier Gateway testing; now closed.
+- **Score probabilities can carry float noise** (e.g. a summed `0.93`/`0.07` that doesn't land on an
+  exact 2-decimal boundary internally). Round before comparing or displaying; never compare for
+  equality.
+- No rate limit was hit across 6 calls with light spacing. Real production limits are still
+  undocumented — this is evidence of "didn't hit one here," not a claim that none exist.
+- The Python SDK raises typed exceptions per status code (`TypeSafeAuthenticationError`,
+  `TypeSafeUnprocessableEntityError`, `TypeSafeRateLimitError`, `TypeSafeInternalServerError`, …) —
+  useful for the retry/error classification in `01-DESIGN.md`.
 
-**Mixed-type batch, one state, one round trip** (2 booleans + 1 score) — confirms D1's core claim:
-```json
-{
-  "authIssue": { "type": "boolean", "probability": 0.97 },
-  "wantsRefund": { "type": "boolean", "probability": 0.99 },
-  "urgency": { "type": "score", "score": 1.62, "probabilities": { "0": 0, "1": 0.38, "2": 0.62 } }
-}
-```
-`confidence` was `{ "urgency": 0.43 }` — **only choice/score question ids appear as keys in
-`confidence`; boolean question ids are absent entirely, not present with a null or empty value.** This
-is the precise, confirmed rule for the decoder: presence in the `confidence` map, not the answer
-`type`, is what to branch on.
+### Historical: the Vercel AI Gateway fallback (no longer the implementation path)
 
-- **Naming shift at this layer.** `noul` → `type: "boolean"`, value key `probability` not `noul`.
-  Semantics unchanged — still P(yes/true), still no distribution.
-- **Pricing checks out exactly**, again: `marketCost` for 282 input tokens = `0.000011844` =
-  `282 × 0.000000042`, matching $0.042/MTok to five decimal places — independent confirmation, not
-  just cited from TypeSafe's own docs.
-- **`outputTokens` is nonzero even though output is priced at $0.** Tokens are counted and reported;
-  only billing is zero.
-- **Results are rounded to 2 decimals** (`rounding` block on every response) — see the score float
-  note above for why that doesn't mean clean arithmetic.
-
-**Still not confirmed live:** structured (object) state. Both attempts failed on the rate limit below
-rather than a validation error, so there's no reason to think it behaves differently from string
-state — Vercel's own docs show a worked object-state example — but "no reason to think otherwise" is
-not the same as observed, and it isn't in this document as fact.
-
-### The rate limit persists after topping up paid credits — it's tied to the promo, not the balance
-
-Every successful call above still shows `cost: "0"` even after adding paid credits to the account.
-**Jev itself stays on its own $0 promotional quota regardless of account balance** — topping up fixed
-the earlier account-verification block (a card-on-file requirement), but did not remove Jev's own
-throttle, because paid credits were never being spent on Jev calls to begin with.
-
-The quota looks small and per-window: two separate runs both got exactly **5 successful calls before
-the 6th failed**, reproduced twice in a row regardless of which question was 6th. No `Retry-After` or
-reset time is exposed anywhere in the error response, so the exact window (per-minute? per-hour?) is
-still unknown — only the approximate size (~5 calls) is established.
-
-This constrains the flagship analysis (`03-LAUNCH.md`), which assumes hundreds of thousands to
-millions of calls. At ~5 calls per window with an unknown window length, that plan needs either the
-real window measured, a paid (non-promotional) tier for the model itself, or TypeSafe's own early
-access. Which of those to pursue, and when, is a cost/timeline decision for the project owner.
-
-### For later: the direct-to-TypeSafe path (early access, not yet available)
-
-`@ai-sdk/typesafe-ai` (real package, confirmed on npm, published by `vercel-release-bot`) gives the
-same `evaluate()` shape but talks straight to `api.typesafe.ai` with a `TYPESAFE_AI_API_KEY`, no
-Gateway involved. Same three primitives, explicitly documented limits — `choice`: 1–255 options,
-`score`: 2–10 levels — and confidence for choice/score lives at
-`result.providerMetadata.typesafe.confidence[questionId]`. Worth switching to once early access opens,
-since it removes both the Gateway's rate limit and the Vercel billing dependency. Not usable today.
+Before direct access was granted, Jev was reached through Vercel AI Gateway's evaluation modality
+(`experimental_evaluate()` from the `ai` npm package, model `typesafe-ai/jev`) as a stopgap — see
+commit history on `worktree-ai-gateway-spike` for that code. Worth keeping as a cross-check: **token
+counts for equivalent calls were identical across both transports** (e.g. 282/21, 331/38, 336/55 on
+both paths), confirming they hit the same underlying model, and pricing was independently verified to
+five decimal places on that path too ($0.042/MTok). The gateway layer renames things at its own
+abstraction (`noul` → `type: "boolean"`, value key → `probability`, confidence moved into
+`providerMetadata.typesafe.confidence`) — none of that is native to TypeSafe's own wire format, which
+is what's documented as current above. No longer in use; direct access removes both the gateway's
+observed rate limit and the Vercel billing dependency entirely.
 
 ---
 
-## Request (native endpoint — early access, not currently reachable)
+## Request
 
 ```http
 POST https://api.typesafe.ai/v1/systemone
@@ -304,11 +271,14 @@ publish the mean.
 
 Resolved: *can one question address N packed documents?* No — see above.
 
+Resolved: *pin an explicit model version for long runs?* No need — `jev-latest` resolves to a concrete
+version (`jev-1.13.0`, confirmed live) and every response returns it. Record the returned `model` per
+cell (already in D9's provenance columns); no pre-pinning required.
+
 | # | Question | Resolve in |
 |---|---|---|
-| B | Per-call limit on question count? | T0.2 |
-| D | Actual rate limits; does request-rate or token-rate bind first? | T0.5 |
-| F | Pin an explicit model version for long runs? Cookbooks pin. | T0.6 |
+| B | Per-call limit on question count? Only 1–3 tested so far. | T0.2 |
+| D | Actual rate limits on the direct API; none hit in 6 light calls, real ceiling unknown. | T0.5 |
 | G | Are question ids billed, given they are not sent to the model? | T0.3 |
 | H | How much does criteria verbosity cost in accuracy? | Phase 6, `schema-tune` |
 | I | Does a projected state beat a full-record state on the same question? | Phase 6 |

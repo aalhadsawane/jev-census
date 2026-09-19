@@ -234,10 +234,11 @@ not just stdout. The engine never branches on a model answer.
 
 ## Stack
 
-Python 3.11+ · async HTTP with a bounded pool (wrap `typesafe-sdk` from
-`--extra-index-url https://pypi.typesafe.ai/` if it exposes async and retries cleanly, else raw HTTP)
-· Pydantic for schemas · PyArrow for Parquet · DuckDB for recipes · SQLite for cache · Typer + Rich ·
-`uv`, `ruff`, `pytest` + `pytest-asyncio` · strict type checking in CI.
+Python 3.11+ · `typesafe-sdk` (`pip install typesafe-sdk`, plain PyPI, no custom index — confirmed
+live 2026-09-20) wrapping the client: `AsyncTypeSafeClient` exists and is the one to build the
+Scheduler on, with a `RetryPolicy` the SDK already exposes · Pydantic for schemas · PyArrow for
+Parquet · DuckDB for recipes · SQLite for cache · Typer + Rich · `uv`, `ruff`, `pytest` +
+`pytest-asyncio` · strict type checking in CI.
 
 `Call` and `Cell` are different granularities with similar names; the type checker is what stops you
 conflating them.
