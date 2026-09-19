@@ -4,6 +4,36 @@ Divergences from the design docs, and why. Newest first.
 
 ---
 
+## 2026-09-20 — Phase P2 (durability) complete, chaos test passing
+
+Built `cache.py`, `shard_writer.py`, `checkpoint.py`, `quarantine.py`, and `runner.py` (T2.1–T2.7),
+which replaces T1.9's inline `cli.py` loop with a durable one. `cli.py` is now a thin Typer wrapper.
+
+One divergence worth recording: `shard_writer.py`'s original slicing behaviour (finalize exactly
+`shard_size` cells at a time, from T2.3's first commit) could split a single document's cells across
+two shards if `shard_size` wasn't a multiple of the per-document cell count. That breaks resume's
+correctness, because resume decides "already done" by reading which `doc_id`s are already durably
+written to a finalized shard — a split document would look half-done. Changed to atomic-per-call
+semantics: a single `add()` call's cells always land in one shard together, never split. The runner
+calls `add()` once per document with that document's whole cell group, so this makes the invariant hold
+by construction rather than by convention.
+
+A second decision, not a divergence: resume correctness is decided by reading finalized shards'
+`doc_id`s directly, not by trusting `checkpoint.json`'s `cursor` number. Finalizing a shard and writing
+the checkpoint are two separate steps, and a crash between them must never produce a duplicate cell —
+membership-in-an-actual-shard is the source of truth; the cursor is informational only. Every answer is
+cached at decode time, before it is ever written to a shard, so a document reprocessed after a crash is
+re-derived from cache rather than re-paid for.
+
+T2.7 (the phase exit criterion) runs `census run` as a real OS subprocess, `kill -9`s it mid-run
+(`CENSUS_FAKE_CLIENT=1` swaps in a deterministic offline fake client — no network, no cost, per the
+Testing rules), resumes it, and diffs the result against a clean uninterrupted run of the same corpus.
+Verified non-flaky across repeated runs: zero duplicate cells, zero re-paid cells, identical final
+table. Also live-verified against the real API: a fresh run through the new runner, then an identical
+re-run that made zero new API calls (cache hit on all 12 cells, $0.0000 spent).
+
+---
+
 ## 2026-09-20 — Phase P1 (walking skeleton) complete, live-verified
 
 Built `hashing.py`, `question_set.py`, `validator.py`, `sources.py`, `normalizer.py`, `client.py`,
