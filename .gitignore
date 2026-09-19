@@ -3,12 +3,7 @@
 .env.local
 .env.*.local
 
-# node
-node_modules/
-dist/
-*.tsbuildinfo
-
-# python (for the future census engine)
+# python
 __pycache__/
 *.pyc
 .venv/

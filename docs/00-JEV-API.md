@@ -58,7 +58,7 @@ All three types, confirmed live and matching the documented contract exactly:
   `confidence` key — the two `noul` answers simply omit it, same rule as above applied per-question
   inside a batch.
 - **Structured (object) state works exactly as documented** — `{"order": {...}, "agent": "bot-7"}` in,
-  correct answer out. This was the one case never confirmed during earlier Gateway testing; now closed.
+  correct answer out.
 - **Score probabilities can carry float noise** (e.g. a summed `0.93`/`0.07` that doesn't land on an
   exact 2-decimal boundary internally). Round before comparing or displaying; never compare for
   equality.
@@ -67,19 +67,6 @@ All three types, confirmed live and matching the documented contract exactly:
 - The Python SDK raises typed exceptions per status code (`TypeSafeAuthenticationError`,
   `TypeSafeUnprocessableEntityError`, `TypeSafeRateLimitError`, `TypeSafeInternalServerError`, …) —
   useful for the retry/error classification in `01-DESIGN.md`.
-
-### Historical: the Vercel AI Gateway fallback (no longer the implementation path)
-
-Before direct access was granted, Jev was reached through Vercel AI Gateway's evaluation modality
-(`experimental_evaluate()` from the `ai` npm package, model `typesafe-ai/jev`) as a stopgap — see
-commit history on `worktree-ai-gateway-spike` for that code. Worth keeping as a cross-check: **token
-counts for equivalent calls were identical across both transports** (e.g. 282/21, 331/38, 336/55 on
-both paths), confirming they hit the same underlying model, and pricing was independently verified to
-five decimal places on that path too ($0.042/MTok). The gateway layer renames things at its own
-abstraction (`noul` → `type: "boolean"`, value key → `probability`, confidence moved into
-`providerMetadata.typesafe.confidence`) — none of that is native to TypeSafe's own wire format, which
-is what's documented as current above. No longer in use; direct access removes both the gateway's
-observed rate limit and the Vercel billing dependency entirely.
 
 ---
 

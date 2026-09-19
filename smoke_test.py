@@ -1,8 +1,8 @@
 """
-Direct-API contract test for Jev, now that TypeSafe access is no longer
-early-access-gated. Mirrors jev-eval.ts's six cases so the two transports
-(Vercel AI Gateway vs. direct api.typesafe.ai) can be diffed fact-for-fact.
-Uses the official typesafe-sdk, reading TYPESAFE_API_KEY from .env.local.
+Contract test for Jev against the direct TypeSafe API: noul (with and
+without criteria), choice, score, a mixed-type batch on one state, and
+structured (object) state. Uses the official typesafe-sdk, reading
+TYPESAFE_API_KEY from .env.local.
 """
 import json
 import os
@@ -118,9 +118,9 @@ def main():
 
     client.close()
 
-    Path("results_direct.json").write_text(json.dumps(results, indent=2, default=str))
+    Path("results.json").write_text(json.dumps(results, indent=2, default=str))
     ok = sum(1 for r in results if r["ok"])
-    print(f"\n=== summary: {ok}/{len(results)} succeeded, written to results_direct.json ===")
+    print(f"\n=== summary: {ok}/{len(results)} succeeded, written to results.json ===")
 
 
 if __name__ == "__main__":
