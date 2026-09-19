@@ -5,8 +5,6 @@ one of two buckets. No retry logic lives here — that is the Scheduler's job (P
 
 from __future__ import annotations
 
-from typing import Union
-
 from typesafe_sdk import (
     Choice,
     Noul,
@@ -27,7 +25,7 @@ from typesafe_sdk import (
 
 from .question_set import Question
 
-SdkQuestion = Union[Noul, Choice, Score]
+SdkQuestion = Noul | Choice | Score
 
 DEFAULT_MODEL = "jev-latest"
 

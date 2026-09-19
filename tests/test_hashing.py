@@ -36,7 +36,7 @@ def test_stable_across_processes():
     code = (
         "import json,sys;"
         "from jev_census.hashing import stable_hash;"
-        f"print(stable_hash(json.loads(sys.argv[1])))"
+        "print(stable_hash(json.loads(sys.argv[1])))"
     )
     result = subprocess.run(
         [sys.executable, "-c", code, json.dumps(payload)],

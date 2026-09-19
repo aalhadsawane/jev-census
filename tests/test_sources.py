@@ -75,7 +75,6 @@ def test_read_parquet_is_lazy_across_row_groups(tmp_path):
     must not require reading the whole file — take() should not raise even if
     later row groups were corrupt, because they're never touched."""
     path = tmp_path / "many_groups.parquet"
-    writer = None
     schema = pa.schema([("i", pa.int64())])
     with pq.ParquetWriter(path, schema) as w:
         for group in range(5):

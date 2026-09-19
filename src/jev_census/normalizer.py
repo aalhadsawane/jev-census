@@ -7,8 +7,9 @@ clean UTF-8 text, per the stage table in `01-DESIGN.md`.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Optional
+from typing import Any
 
 from .hashing import stable_hash
 from .quarantine import QuarantineWriter
@@ -23,8 +24,8 @@ class Document:
 
 def normalize(
     rows: Iterator[dict[str, Any]],
-    id_field: Optional[str] = None,
-    quarantine: Optional[QuarantineWriter] = None,
+    id_field: str | None = None,
+    quarantine: QuarantineWriter | None = None,
 ) -> Iterator[Document]:
     """Turn raw rows into `Document`s.
 

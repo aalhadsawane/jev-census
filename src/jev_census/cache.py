@@ -19,7 +19,7 @@ import dataclasses
 import json
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Self
 
 from .decoder import DecodedAnswer
 from .hashing import stable_hash
@@ -67,7 +67,7 @@ class CellCache:
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
-    def resolve_model(self, alias: str) -> Optional[str]:
+    def resolve_model(self, alias: str) -> str | None:
         """The concrete model an alias last resolved to, or None if never seen."""
         row = self._conn.execute(
             "SELECT resolved_model FROM model_aliases WHERE alias = ?", (alias,)
@@ -83,7 +83,7 @@ class CellCache:
         )
         self._conn.commit()
 
-    def get(self, key: str) -> Optional[CachedCell]:
+    def get(self, key: str) -> CachedCell | None:
         row = self._conn.execute(
             "SELECT answer_json, model, input_tokens FROM cells WHERE cache_key = ?", (key,)
         ).fetchone()
@@ -109,7 +109,7 @@ class CellCache:
     def close(self) -> None:
         self._conn.close()
 
-    def __enter__(self) -> "CellCache":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc_info) -> None:

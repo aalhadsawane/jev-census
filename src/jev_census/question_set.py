@@ -6,7 +6,7 @@ the data and computes hashes.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,8 +26,8 @@ class Question(BaseModel):
     type: QuestionType
     instructions: Any
     criteria: Any = None
-    projection: Optional[list[str]] = None
-    gate: Optional[Gate] = None
+    projection: list[str] | None = None
+    gate: Gate | None = None
 
     @property
     def body_hash(self) -> str:
@@ -50,7 +50,7 @@ class QuestionSetDefaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     gate: Gate = "strict"
-    projection: Optional[list[str]] = None
+    projection: list[str] | None = None
 
 
 class QuestionSet(BaseModel):

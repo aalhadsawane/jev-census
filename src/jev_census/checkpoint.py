@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional, TypedDict
+from typing import TypedDict
 
 
 class CheckpointData(TypedDict):
@@ -30,7 +30,7 @@ class Checkpoint:
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def read(self) -> Optional[CheckpointData]:
+    def read(self) -> CheckpointData | None:
         if not self.path.exists():
             return None
         return json.loads(self.path.read_text(encoding="utf-8"))

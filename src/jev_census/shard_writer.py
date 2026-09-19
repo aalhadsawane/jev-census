@@ -3,6 +3,12 @@ files. Finalisation writes to a `.tmp` file in the same directory, then
 `os.replace`s it into place - atomic on the same filesystem, so a crash before
 the replace leaves only a stray `.tmp` file that `shard_paths()` (glob
 `*.parquet`) never returns. A finalized shard is never rewritten.
+
+Every `add()` call is one atomic unit: all of its cells land in the same
+shard, never split across two. The runner (runner.py) calls `add()` once per
+document with that document's whole cell group, so a shard boundary can never
+fall inside a document — resume's "which documents are already durably
+written" check (by reading finalized shards' doc_ids) depends on this.
 """
 
 from __future__ import annotations
@@ -33,14 +39,17 @@ class ShardWriter:
         return max(int(p.stem) for p in existing) + 1
 
     def add(self, cells: list[Cell]) -> list[Path]:
-        """Buffer cells; finalize as many full shards as the buffer allows.
-        Returns the paths of any shards finalized by this call."""
+        """Buffer `cells` as one atomic unit. Finalizes the whole current
+        buffer as a single shard once it reaches `shard_size`, so a shard may
+        run somewhat larger than `shard_size` (by up to one call's worth) but
+        never splits a single `add()` call's cells across two shards. Returns
+        that shard's path in a single-element list, or `[]` if still under
+        threshold."""
         self._buffer.extend(cells)
-        finalized: list[Path] = []
-        while len(self._buffer) >= self.shard_size:
-            chunk, self._buffer = self._buffer[: self.shard_size], self._buffer[self.shard_size :]
-            finalized.append(self._finalize(chunk))
-        return finalized
+        if len(self._buffer) >= self.shard_size:
+            chunk, self._buffer = self._buffer, []
+            return [self._finalize(chunk)]
+        return []
 
     def flush(self) -> Path | None:
         """Finalize whatever remains buffered as one last (possibly short) shard."""

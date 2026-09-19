@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -7,7 +7,7 @@ import pytest
 from jev_census.cell import Cell
 from jev_census.shard_writer import ShardWriter
 
-TS = datetime(2026, 9, 20, 12, 0, 0, tzinfo=timezone.utc)
+TS = datetime(2026, 9, 20, 12, 0, 0, tzinfo=UTC)
 
 
 def _cell(doc_id: str) -> Cell:
@@ -35,24 +35,39 @@ def _cell(doc_id: str) -> Cell:
     )
 
 
-def test_finalizes_full_shards_as_buffer_fills(tmp_path):
+def test_add_call_is_atomic_never_split_across_shards(tmp_path):
+    """A single add() call (one document's cells, in real usage) always lands
+    in one shard entirely, even if it alone exceeds shard_size."""
     writer = ShardWriter(tmp_path, shard_size=2)
-    cells = [_cell(f"doc-{i}") for i in range(5)]
-    finalized = writer.add(cells)
+    finalized = writer.add([_cell("doc-a"), _cell("doc-b"), _cell("doc-c")])  # 3 cells, threshold 2
 
-    assert len(finalized) == 2  # two full shards of 2; 1 left buffered
-    assert writer.buffered_count == 1
-    assert writer.shard_paths() == finalized
+    assert len(finalized) == 1
+    assert writer.buffered_count == 0
+    table = pq.read_table(finalized[0])
+    assert table.num_rows == 3  # all 3 cells together, not split
+
+
+def test_finalizes_once_threshold_crossed_across_several_calls(tmp_path):
+    """Several small add() calls (one per document) accumulate in the buffer
+    until the threshold is crossed, then finalize as one shard together."""
+    writer = ShardWriter(tmp_path, shard_size=3)
+    assert writer.add([_cell("doc-a")]) == []
+    assert writer.add([_cell("doc-b")]) == []
+    finalized = writer.add([_cell("doc-c")])  # buffer now at 3 -> finalizes
+
+    assert len(finalized) == 1
+    assert writer.buffered_count == 0
+    assert pq.read_table(finalized[0]).num_rows == 3
 
 
 def test_flush_finalizes_remaining_buffer(tmp_path):
-    writer = ShardWriter(tmp_path, shard_size=2)
+    writer = ShardWriter(tmp_path, shard_size=10)
     writer.add([_cell(f"doc-{i}") for i in range(5)])
     last = writer.flush()
 
     assert last is not None
     assert writer.buffered_count == 0
-    assert len(writer.shard_paths()) == 3
+    assert len(writer.shard_paths()) == 1
 
 
 def test_flush_on_empty_buffer_is_a_noop(tmp_path):

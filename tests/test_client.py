@@ -2,8 +2,8 @@
 `system_one` is monkeypatched to raise the exact SDK exceptions we classify."""
 
 import httpx2  # typesafe_sdk's own vendored httpx package, used for its Headers type
-import typesafe_sdk as sdk
 import pytest
+import typesafe_sdk as sdk
 
 from jev_census.client import JevClient, JevConfigError, JevTransientError, to_sdk_question
 from jev_census.question_set import Question

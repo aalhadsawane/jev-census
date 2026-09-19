@@ -6,8 +6,9 @@ of the same file, which is what the normalizer's id-stability guarantee relies o
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pyarrow.parquet as pq
 
@@ -15,8 +16,7 @@ import pyarrow.parquet as pq
 def read_parquet(path: str | Path, batch_size: int = 1024) -> Iterator[dict[str, Any]]:
     parquet_file = pq.ParquetFile(path)
     for batch in parquet_file.iter_batches(batch_size=batch_size):
-        for row in batch.to_pylist():
-            yield row
+        yield from batch.to_pylist()
 
 
 def read_csv(path: str | Path) -> Iterator[dict[str, Any]]:
