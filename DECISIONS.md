@@ -4,6 +4,42 @@ Divergences from the design docs, and why. Newest first.
 
 ---
 
+## 2026-09-20 — Phase P3 (cost control) complete, calibrated against the real API
+
+Built `money.py`, `token_estimator.py`, `estimate.py` (`census estimate`), and calibration tracking in
+`cache.py` (T3.1–T3.5). `runner.py`'s admission control now projects each call's cost with the
+estimator before making it, rather than only checking spend-so-far.
+
+Two real bugs found and fixed while building this phase, not just new features:
+
+1. **Accounting didn't charge failed-decode attempts.** A call whose response failed to decode
+   (`DecodeError`) was skipped without charging its tokens, even though the API had already consumed
+   them. Fixed by charging `total_input_tokens_charged` immediately after a response comes back, before
+   decoding is even attempted — matching `01-DESIGN.md`'s "charge attempts, not successes" literally, not
+   just in spirit.
+2. **`cache_hits`/`cache_misses` counted documents admission control then rejected.** They were
+   incremented before the budget check, so a document rejected by the new projected-cost admission
+   control still inflated "N newly asked" in the run summary. Moved the counters to only fire once a
+   document is actually committed (decoded successfully, or a full cache hit).
+
+**Calibration, live-verified:** ran `census run` against the real TypeSafe API and read back the
+reported ratio — 2.27x. The char-based estimator meaningfully undercounts Jev's real tokenizer, which is
+exactly the drift `calibration_ratio()` exists to surface; nothing here silently assumes the heuristic is
+accurate. Admission control's overshoot bound holds regardless of estimator accuracy, since P1–P3 has no
+concurrency yet: every call is checked individually before being admitted, so overshoot is bounded to at
+most one call by construction, not by how good the estimate is.
+
+**A chaos-test bug, not a runner bug**, surfaced while stress-testing this phase's changes: T2.7's
+clean-vs-resumed comparison intermittently failed (~1 in 5–8 runs). Traced it — by comparing raw on-disk
+Parquet output directly, bypassing the test's own comparison helper — to `input_tokens` not being
+excluded from the diff, alongside `call_id`/`run_id`/`ts`. `input_tokens` is the *whole call's* token
+count duplicated onto every cell that call answered; a resumed run legitimately batches a document's
+still-missing questions differently than a clean run batches all of them together, so the same correct
+decision can carry a different `input_tokens` value. The actual decision values never differed. Fixed the
+comparison; stress-tested 15/15 clean afterward.
+
+---
+
 ## 2026-09-20 — Phase P2 (durability) complete, chaos test passing
 
 Built `cache.py`, `shard_writer.py`, `checkpoint.py`, `quarantine.py`, and `runner.py` (T2.1–T2.7),
