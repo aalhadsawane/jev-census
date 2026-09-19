@@ -1,36 +1,36 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pyarrow.parquet as pq
 
 from jev_census.cell import Cell
 from jev_census.writer import CELLS_SCHEMA, write_cells_parquet
 
-TS = datetime(2026, 9, 20, 12, 0, 0, tzinfo=timezone.utc)
+TS = datetime(2026, 9, 20, 12, 0, 0, tzinfo=UTC)
 
 
 def _base_kwargs(**overrides):
-    kwargs = dict(
-        doc_id="T-1041",
-        question_id="is_urgent",
-        type="noul",
-        noul=0.97,
-        choice=None,
-        score=None,
-        probabilities=None,
-        legend=None,
-        confidence=0.94,
-        confidence_source="derived",
-        gate="strict",
-        chunk_count=1,
-        projection_id="p0",
-        call_id="call-1",
-        run_id="run-1",
-        model="jev-1.13.0",
-        questionset_hash="qshash",
-        question_body_hash="bodyhash",
-        input_tokens=282,
-        ts=TS,
-    )
+    kwargs = {
+        "doc_id": "T-1041",
+        "question_id": "is_urgent",
+        "type": "noul",
+        "noul": 0.97,
+        "choice": None,
+        "score": None,
+        "probabilities": None,
+        "legend": None,
+        "confidence": 0.94,
+        "confidence_source": "derived",
+        "gate": "strict",
+        "chunk_count": 1,
+        "projection_id": "p0",
+        "call_id": "call-1",
+        "run_id": "run-1",
+        "model": "jev-1.13.0",
+        "questionset_hash": "qshash",
+        "question_body_hash": "bodyhash",
+        "input_tokens": 282,
+        "ts": TS,
+    }
     kwargs.update(overrides)
     return kwargs
 

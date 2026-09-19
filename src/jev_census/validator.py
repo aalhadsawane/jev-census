@@ -19,10 +19,10 @@ _IMPERATIVE_VERBS = {
 }
 
 _COUNTING_PATTERNS = [
-    re.compile(r"\bhow many\b", re.I),
-    re.compile(r"\bcount(?:ing|s)?\b", re.I),
-    re.compile(r"\baverage\b", re.I),
-    re.compile(r"\bmean number\b", re.I),
+    re.compile(r"\bhow many\b", re.IGNORECASE),
+    re.compile(r"\bcount(?:ing|s)?\b", re.IGNORECASE),
+    re.compile(r"\baverage\b", re.IGNORECASE),
+    re.compile(r"\bmean number\b", re.IGNORECASE),
 ]
 
 _DATE_WORD = (
@@ -31,7 +31,7 @@ _DATE_WORD = (
     r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
     r"yesterday|today|tomorrow|deadline)"
 )
-_DATE_COMPARISON_PATTERN = re.compile(rf"\b(before|after)\b\s+.{{0,20}}?{_DATE_WORD}", re.I)
+_DATE_COMPARISON_PATTERN = re.compile(rf"\b(before|after)\b\s+.{{0,20}}?{_DATE_WORD}", re.IGNORECASE)
 
 
 class ValidationError(Exception):

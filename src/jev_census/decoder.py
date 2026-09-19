@@ -11,8 +11,8 @@ raises `DecodeError` for the whole call rather than returning partial results.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from typesafe_sdk import ChoiceAnswer, NoulAnswer, ScoreAnswer, SystemOneResponse
 
