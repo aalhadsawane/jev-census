@@ -9,7 +9,7 @@ def _data(**overrides):
         "questionset_hash": "qh",
         "cursor": 0,
         "shards": [],
-        "spent_usd": 0.0,
+        "total_input_tokens_charged": 0,
     }
     data.update(overrides)
     return data

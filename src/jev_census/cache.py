@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS model_aliases (
     resolved_model TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS calibration (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    estimated_tokens_total INTEGER NOT NULL DEFAULT 0,
+    actual_tokens_total INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -101,6 +106,34 @@ class CellCache:
             (key, answer.question_id, model, json.dumps(dataclasses.asdict(answer)), input_tokens),
         )
         self._conn.commit()
+
+    def record_calibration(self, estimated_tokens: int, actual_tokens: int) -> None:
+        """T3.5: accumulate one call's (estimated, actual) input token counts
+        into the running cumulative totals used by `calibration_ratio()`."""
+        self._conn.execute(
+            "INSERT INTO calibration (id, estimated_tokens_total, actual_tokens_total) "
+            "VALUES (1, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "estimated_tokens_total = estimated_tokens_total + excluded.estimated_tokens_total, "
+            "actual_tokens_total = actual_tokens_total + excluded.actual_tokens_total",
+            (estimated_tokens, actual_tokens),
+        )
+        self._conn.commit()
+
+    def calibration_ratio(self) -> float | None:
+        """Cumulative actual/estimated token ratio across every call recorded
+        so far, or None before the first one. Above 1 means the estimator is
+        under-counting; below 1 means it's over-counting. `runner.py` widens
+        its admission-control margin as this drifts from 1.0."""
+        row = self._conn.execute(
+            "SELECT estimated_tokens_total, actual_tokens_total FROM calibration WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return None
+        estimated_total, actual_total = row
+        if estimated_total == 0:
+            return None
+        return actual_total / estimated_total
 
     def stats(self) -> dict:
         (count,) = self._conn.execute("SELECT COUNT(*) FROM cells").fetchone()

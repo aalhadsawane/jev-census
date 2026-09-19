@@ -35,3 +35,19 @@ def read_source(path: str | Path) -> Iterator[dict[str, Any]]:
     if suffix == ".csv":
         return read_csv(path)
     raise ValueError(f"unsupported source format '{suffix}' (expected .parquet or .csv): {path}")
+
+
+def count_rows(path: str | Path) -> int:
+    """Total document count, for `census estimate` (T3.2) to scale a sample's
+    average up to the whole corpus. Parquet metadata carries the row count
+    without reading any data; CSV needs one lightweight pass over the file."""
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        return pq.ParquetFile(path).metadata.num_rows
+    if suffix == ".csv":
+        with open(path, newline="", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)  # header
+            return sum(1 for _ in reader)
+    raise ValueError(f"unsupported source format '{suffix}' (expected .parquet or .csv): {path}")

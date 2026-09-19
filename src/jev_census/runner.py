@@ -12,6 +12,15 @@ separate steps; a crash between them must never produce a duplicate. Every
 answer is cached the moment it's decoded, before it's ever written to a
 shard — so even a document reprocessed after a crash (because its shard
 never got finalized) is re-derived from cache, never re-paid for.
+
+Cost accounting (T3.3): spend is tracked as `total_input_tokens_charged`, an
+exact integer sum of every *charged* call's `usage.input_tokens` — charged the
+moment a response comes back, before decoding, so a call whose answers turn
+out to be malformed (DecodeError) still costs what it actually cost. A dollar
+amount is only ever derived from that integer via `money.py`, never
+accumulated as a float. Admission control (T3.4) projects the *next* call's
+cost with the token estimator (T3.1) before making it, and every real call's
+actual tokens calibrate that estimator (T3.5) via `cache.py`'s running ratio.
 """
 
 from __future__ import annotations
@@ -32,14 +41,14 @@ from .cell import build_cell
 from .checkpoint import Checkpoint
 from .client import JevTransientError
 from .decoder import DecodeError, decode_answers
+from .money import micro_usd_to_usd, tokens_to_micro_usd, usd_to_micro_usd
 from .normalizer import normalize
 from .quarantine import QuarantineWriter
 from .question_set import Question, QuestionSet, load_question_set
 from .shard_writer import ShardWriter
 from .sources import read_source
+from .token_estimator import estimate_call_tokens
 from .writer import cells_to_table
-
-INPUT_COST_PER_MTOK_USD = 0.042
 
 
 class AskingClient(Protocol):
@@ -74,10 +83,15 @@ class RunResult:
     documents_skipped: int
     documents_quarantined: int
     spent_usd: float
+    total_input_tokens_charged: int
     cache_hits: int
     cache_misses: int
     budget_exhausted: bool
     out_path: Path
+    # T3.5: cumulative actual/estimated token ratio across every real call in
+    # this run (and every prior run sharing this cache.db). None if no real
+    # call was made (e.g. a fully-cached rerun, or budget 0 before any call).
+    calibration_ratio: float | None
 
 
 def _questionset_diff(old_body_hashes: dict[str, str], question_set: QuestionSet) -> str:
@@ -156,7 +170,10 @@ def run_census(config: RunConfig, client: AskingClient) -> RunResult:
     already_done_ids = _already_done_ids(shard_writer)
 
     prior_checkpoint = checkpoint.read()
-    spent_usd = prior_checkpoint["spent_usd"] if prior_checkpoint else 0.0
+    total_input_tokens_charged = (
+        prior_checkpoint["total_input_tokens_charged"] if prior_checkpoint else 0
+    )
+    budget_micro_usd = usd_to_micro_usd(config.budget_usd)
 
     projection_fields: set[str] = set()
     for q in question_set.questions:
@@ -202,16 +219,21 @@ def run_census(config: RunConfig, client: AskingClient) -> RunResult:
             else:
                 misses = dict(questions_by_id)
 
-            cache_hits_total += len(hits)
-            cache_misses_total += len(misses)
-
             resolved_model = model_for_key
             input_tokens_new = 0
             call_id = "cached"
             decoded_new = []
 
             if misses:
-                if spent_usd >= config.budget_usd:
+                # T3.4 admission control: project the *next* call's cost with
+                # the token estimator before admitting it, not just check
+                # spend-so-far — a single unusually large call could otherwise
+                # blow well past the cap before the next check ever ran.
+                projected_state_tokens, projected_schema_tokens = estimate_call_tokens(state, misses)
+                projected_tokens = projected_state_tokens + projected_schema_tokens
+                spent_micro_usd = tokens_to_micro_usd(total_input_tokens_charged)
+                projected_micro_usd = tokens_to_micro_usd(projected_tokens)
+                if spent_micro_usd + projected_micro_usd > budget_micro_usd:
                     budget_exhausted = True
                     break
 
@@ -222,20 +244,33 @@ def run_census(config: RunConfig, client: AskingClient) -> RunResult:
                     documents_skipped += 1
                     continue
 
+                # Charge the attempt now, before decoding — a response that
+                # fails to decode still consumed real input tokens
+                # (01-DESIGN.md Hard rules: "Charge attempts, not successes").
+                resolved_model = response.model
+                input_tokens_new = response.usage.input_tokens or 0
+                total_input_tokens_charged += input_tokens_new
+                cache.record_model_resolution(config.model_alias, resolved_model)
+                cache.record_calibration(estimated_tokens=projected_tokens, actual_tokens=input_tokens_new)
+
                 try:
                     decoded_new = decode_answers(response, misses)
                 except DecodeError:
                     documents_skipped += 1
                     continue
 
-                resolved_model = response.model
-                input_tokens_new = response.usage.input_tokens or 0
-                spent_usd += input_tokens_new / 1_000_000 * INPUT_COST_PER_MTOK_USD
-                cache.record_model_resolution(config.model_alias, resolved_model)
                 for decoded_answer in decoded_new:
                     q = questions_by_id[decoded_answer.question_id]
                     key = cache_key(state, decoded_answer.question_id, q.body_hash, resolved_model)
                     cache.put(key, decoded_answer, resolved_model, input_tokens_new)
+
+            # Only counted once the document is actually going to be written:
+            # after a successful decode, or immediately if it was a full
+            # cache hit. A document rejected by admission control or a
+            # transient/decode failure never reaches here, so its hits/misses
+            # never inflate "N cells from cache, M newly asked".
+            cache_hits_total += len(hits)
+            cache_misses_total += len(misses)
 
             ts = datetime.now(UTC)
             cells = []
@@ -283,7 +318,7 @@ def run_census(config: RunConfig, client: AskingClient) -> RunResult:
                         "questionset_hash": question_set.questionset_hash,
                         "cursor": documents_processed,
                         "shards": [p.name for p in shard_writer.shard_paths()],
-                        "spent_usd": spent_usd,
+                        "total_input_tokens_charged": total_input_tokens_charged,
                     }
                 )
     finally:
@@ -294,11 +329,12 @@ def run_census(config: RunConfig, client: AskingClient) -> RunResult:
                 "questionset_hash": question_set.questionset_hash,
                 "cursor": documents_processed,
                 "shards": [p.name for p in shard_writer.shard_paths()],
-                "spent_usd": spent_usd,
+                "total_input_tokens_charged": total_input_tokens_charged,
             }
         )
         out_path = config.out_dir / "cells.parquet"
         _write_results(shard_writer, out_path)
+        calibration_ratio = cache.calibration_ratio()
         cache.close()
 
     return RunResult(
@@ -307,9 +343,11 @@ def run_census(config: RunConfig, client: AskingClient) -> RunResult:
         documents_already_done=documents_already_done,
         documents_skipped=documents_skipped,
         documents_quarantined=quarantine.count,
-        spent_usd=spent_usd,
+        spent_usd=micro_usd_to_usd(tokens_to_micro_usd(total_input_tokens_charged)),
+        total_input_tokens_charged=total_input_tokens_charged,
         cache_hits=cache_hits_total,
         cache_misses=cache_misses_total,
         budget_exhausted=budget_exhausted,
         out_path=out_path,
+        calibration_ratio=calibration_ratio,
     )

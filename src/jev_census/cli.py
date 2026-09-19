@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from .client import JevClient, JevConfigError
+from .estimate import DEFAULT_SAMPLE_SIZE, format_estimate
+from .estimate import estimate as run_estimate
 from .runner import RunConfig, RunnerError, run_census
 
 app = typer.Typer(add_completion=False, help="census: ask the same questions of every row, get back a table.")
@@ -43,6 +45,22 @@ def _build_client():
         delay = float(os.environ.get("CENSUS_FAKE_CLIENT_DELAY", "0"))
         return FakeJevClient(delay_seconds=delay)
     return JevClient()
+
+
+@app.command()
+def estimate(
+    input: Path = typer.Option(..., "--input", exists=True, dir_okay=False, help="Parquet or CSV corpus"),
+    questions: Path = typer.Option(..., "--questions", exists=True, dir_okay=False, help="Question set YAML"),
+    sample: int = typer.Option(DEFAULT_SAMPLE_SIZE, "--sample", help="Documents to sample for the projection"),
+    id_field: str | None = typer.Option(
+        None, "--id-field", help="Source column to use as doc_id; content-hash fallback if omitted"
+    ),
+) -> None:
+    """Project cost and runtime before spending anything. Never calls the API."""
+    result = run_estimate(input, questions, sample_size=sample, id_field=id_field)
+    console.print()
+    console.print(format_estimate(result))
+    console.print()
 
 
 @app.command()
@@ -101,12 +119,23 @@ def run(
         f"({result.cache_hits} cells from cache, {result.cache_misses} newly asked); "
         f"{result.documents_skipped} skipped, {result.documents_quarantined} quarantined"
     )
-    console.print(f"spent ${result.spent_usd:.4f} of ${budget:.2f} budget")
+    console.print(
+        f"spent ${result.spent_usd:.4f} of ${budget:.2f} budget "
+        f"({result.total_input_tokens_charged:,} input tokens charged)"
+    )
+    if result.calibration_ratio is not None:
+        console.print(f"estimator calibration: actual/estimated = {result.calibration_ratio:.2f}x")
+
     if result.budget_exhausted:
         console.print(
             f"[yellow]budget exhausted before the corpus finished — resume with "
             f"--resume {result.run_id} after raising --budget[/yellow]"
         )
+        console.print(f"[yellow]resume command: census run --resume {result.run_id} ...[/yellow]")
+        # Clean, resumable stop, not an error — but non-zero so scripts notice
+        # the run is incomplete (01-DESIGN.md Governor: "exit non-zero, print
+        # the resume command").
+        raise typer.Exit(code=2)
 
 
 if __name__ == "__main__":

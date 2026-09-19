@@ -23,7 +23,10 @@ class CheckpointData(TypedDict):
     questionset_hash: str
     cursor: int
     shards: list[str]
-    spent_usd: float
+    # Integer, exact sum of every charged call's usage.input_tokens (T3.3) -
+    # never a float dollar amount, which would accumulate rounding error and
+    # could drift from "matches summed usage.input_tokens exactly".
+    total_input_tokens_charged: int
 
 
 class Checkpoint:

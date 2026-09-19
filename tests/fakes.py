@@ -46,6 +46,7 @@ class FakeJevClient:
         self,
         model: str = "jev-1.13.0-fake",
         fail_doc_state: object | None = None,
+        drop_answer_for_state: object | None = None,
         delay_seconds: float = 0.0,
     ):
         self.model = model
@@ -54,6 +55,12 @@ class FakeJevClient:
         # test the skip-and-continue path without needing a real flaky server.
         self._fail_doc_state = fail_doc_state
         self._failed_once = False
+        # Optional: make one specific state's response drop an answer once,
+        # simulating a real response whose decode fails (DecodeError) even
+        # though the call itself succeeded and consumed real input tokens —
+        # for testing that a decode failure still charges the attempt (T3.3).
+        self._drop_answer_for_state = drop_answer_for_state
+        self._dropped_once = False
         # Optional: artificial per-call latency so a subprocess-based chaos
         # test (T2.7) has a wide, reliable window to kill -9 mid-run.
         self._delay_seconds = delay_seconds
@@ -73,6 +80,11 @@ class FakeJevClient:
         self.calls.append((state, tuple(sorted(questions.keys()))))
         answers = {qid: _fake_answer(state, qid, q) for qid, q in questions.items()}
         input_tokens = 50 + 20 * len(questions)
+
+        if self._drop_answer_for_state is not None and state == self._drop_answer_for_state and not self._dropped_once:
+            self._dropped_once = True
+            del answers[next(iter(answers))]
+
         return SystemOneResponse(
             model=self.model, usage=Usage(input_tokens=input_tokens, output_tokens=5), answers=answers
         )
