@@ -4,6 +4,41 @@ Divergences from the design docs, and why. Newest first.
 
 ---
 
+## 2026-09-20 — Phase P4 (scale) complete, 120k rows unattended
+
+Built `client.py`'s `AsyncJevClient`, `failure.py`, `retry.py`, `aimd.py`, and `scheduler.py` (T4.1–T4.5):
+the concurrent replacement for `runner.py`'s sequential loop. `runner.py` itself is untouched except for
+one additive field (`RunResult.interrupted`, default `False`) — it remains the pure sequential reference
+implementation, still fully tested, no longer the CLI's execution path.
+
+**Concurrency model.** A bounded `asyncio.Queue` between the document producer and a pool of worker
+coroutines gives backpressure: a full queue blocks the producer's `put()`, capping memory regardless of
+corpus size, rather than a slow API throttling nothing while the queue (and memory) grows unbounded.
+Each worker processes one document end to end — cache lookup, the API call (or a backoff sleep), decode,
+cache write, shard write. Every one of those steps except the call itself is synchronous, and therefore
+atomic with respect to every other worker under asyncio's cooperative single-threaded scheduling — no
+lock was needed around the shared `CellCache` or `ShardWriter`. This wasn't the original plan (a
+three-stage producer/worker/writer pipeline with a dedicated single writer task was); the simpler
+one-worker-does-everything design turned out to be correct by construction once the "only one coroutine's
+Python code ever runs at a time, and neither shared object ever awaits mid-operation" property was
+recognized, and it avoided a whole extra queue and coordination layer.
+
+**Admission control under real concurrency.** `01-DESIGN.md` already anticipated this: "overshoot is
+bounded by in-flight concurrency," not by one call. Several workers can pass the budget check before any
+of them updates the shared spend counter — intentional, not a race to fix.
+
+**T4.4, tested with the same rigor as T2.7's `kill -9`:** a dedicated test sends a real `SIGINT` to a
+subprocess mid-run, verifies exit code 130 and a printed resume command, then resumes and diffs the
+result against a clean uninterrupted run. Stress-tested 10/10 clean, same as the chaos test.
+
+**P4's exit criterion, verified directly, not inferred:** generated a 120,000-row synthetic corpus and
+ran it unattended through the CLI (fake client, for speed — this validates pipeline mechanics, not live
+cost) at concurrency ceiling 32. Completed in ~230 seconds, exit code 0, 480,000 cells written with zero
+duplicates across 120,000 unique documents. Also live-verified against the real API on a small sample,
+including the live progress line.
+
+---
+
 ## 2026-09-20 — Phase P3 (cost control) complete, calibrated against the real API
 
 Built `money.py`, `token_estimator.py`, `estimate.py` (`census estimate`), and calibration tracking in
