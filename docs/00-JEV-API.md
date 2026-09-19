@@ -1,10 +1,72 @@
 # 00 — Jev API: verified facts
 
 Transcribed 2026-09-19 from `docs.typesafe.ai`: `/api.md`, `/concepts/state`, `/confidence`,
-`/cookbooks/parallel_questions`, `/model-jaggedness/jev-1.13`.
+`/cookbooks/parallel_questions`, `/model-jaggedness/jev-1.13`. Access path confirmed live 2026-09-20.
 
 **Re-verify before implementing.** Where the live API disagrees, the API wins and this file gets
 fixed in the same commit.
+
+---
+
+## Access path (current): direct API, confirmed working end to end
+
+TypeSafe granted API access 2026-09-20. We call `api.typesafe.ai` directly with the official
+`typesafe-sdk` Python package — no gateway, no middleman. All 6 planned contract cases succeeded live
+against this path (`noul` × 2, `choice`, `score`, a mixed-type batch, structured object state) with no
+rate limiting encountered.
+
+```python
+from typesafe_sdk import TypeSafeClient, Noul
+
+client = TypeSafeClient(model="jev-latest")  # reads TYPESAFE_API_KEY from the environment
+result = client.system_one(
+    "The support agent issued a full refund to the customer.",
+    questions={"refunded": Noul(instructions="Was a refund issued?")},
+)
+```
+
+Confirmed live response, verbatim (`model` resolves the `jev-latest` alias to the concrete version
+actually used — useful for provenance, per D9):
+
+```json
+{
+  "model": "jev-1.13.0",
+  "usage": { "input_tokens": 282, "output_tokens": 21 },
+  "answers": { "refunded": { "type": "noul", "noul": 0.99 } }
+}
+```
+
+All three types, confirmed live and matching the documented contract exactly:
+
+```json
+// choice — confidence lives directly on the answer, not in provider metadata
+{ "type": "choice", "choice": "billing", "confidence": 1.0,
+  "probabilities": { "billing": 1.0, "shipping": 0.0, "technical": 0.0 } }
+
+// score — legend and confidence both on the answer
+{ "type": "score", "score": 2.92, "confidence": 0.92,
+  "legend": { "0": "poor: no tests or docs", "1": "fair: partial coverage",
+              "2": "good: tests and docs", "3": "excellent: tests, docs, and clear rationale" },
+  "probabilities": { "0": 0.0, "1": 0.0, "2": 0.07, "3": 0.93 } }
+```
+
+- **`noul` answers carry no `confidence` key at all** — not null, not absent-with-a-placeholder,
+  simply not present on the object. `choice` and `score` always carry one. That presence check, not
+  the answer `type`, is the right thing for a decoder to branch on.
+- **Batching confirmed with no accuracy cost.** A 3-question batch (2 `noul` + 1 `score`) on one state
+  returned all three correctly in one round trip, and only the `score` question carried a
+  `confidence` key — the two `noul` answers simply omit it, same rule as above applied per-question
+  inside a batch.
+- **Structured (object) state works exactly as documented** — `{"order": {...}, "agent": "bot-7"}` in,
+  correct answer out.
+- **Score probabilities can carry float noise** (e.g. a summed `0.93`/`0.07` that doesn't land on an
+  exact 2-decimal boundary internally). Round before comparing or displaying; never compare for
+  equality.
+- No rate limit was hit across 6 calls with light spacing. Real production limits are still
+  undocumented — this is evidence of "didn't hit one here," not a claim that none exist.
+- The Python SDK raises typed exceptions per status code (`TypeSafeAuthenticationError`,
+  `TypeSafeUnprocessableEntityError`, `TypeSafeRateLimitError`, `TypeSafeInternalServerError`, …) —
+  useful for the retry/error classification in `01-DESIGN.md`.
 
 ---
 
@@ -196,11 +258,14 @@ publish the mean.
 
 Resolved: *can one question address N packed documents?* No — see above.
 
+Resolved: *pin an explicit model version for long runs?* No need — `jev-latest` resolves to a concrete
+version (`jev-1.13.0`, confirmed live) and every response returns it. Record the returned `model` per
+cell (already in D9's provenance columns); no pre-pinning required.
+
 | # | Question | Resolve in |
 |---|---|---|
-| B | Per-call limit on question count? | T0.2 |
-| D | Actual rate limits; does request-rate or token-rate bind first? | T0.5 |
-| F | Pin an explicit model version for long runs? Cookbooks pin. | T0.6 |
+| B | Per-call limit on question count? Only 1–3 tested so far. | T0.2 |
+| D | Actual rate limits on the direct API; none hit in 6 light calls, real ceiling unknown. | T0.5 |
 | G | Are question ids billed, given they are not sent to the model? | T0.3 |
 | H | How much does criteria verbosity cost in accuracy? | Phase 6, `schema-tune` |
 | I | Does a projected state beat a full-record state on the same question? | Phase 6 |
