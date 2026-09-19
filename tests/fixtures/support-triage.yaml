@@ -1,0 +1,36 @@
+version: 1
+name: support-triage
+defaults:
+  projection: [subject, body]      # the only fields questions see
+
+questions:
+  - id: is_urgent
+    type: noul                     # yes/no → a probability
+    instructions: The customer states or implies the problem is time-sensitive.
+    criteria:
+      "true":  Blocked work, money at risk, or an explicit deadline.
+      "false": A question or request with no stated time pressure.
+
+  - id: department
+    type: choice                   # pick one → a distribution over options
+    instructions: The team that should handle this ticket.
+    criteria:
+      billing:   Payments, invoicing, refunds, payouts.
+      technical: Bugs, outages, integrations, API errors.
+      sales:     Pricing, upgrades, new accounts, renewals.
+
+  - id: frustration
+    type: score                    # ordered levels → a weighted value
+    instructions: How frustrated the customer sounds.
+    criteria:
+      - Calm and neutral.
+      - Mildly annoyed.
+      - Clearly frustrated.
+      - Angry, or threatening to escalate.
+
+  - id: churn_risk
+    type: noul
+    instructions: The customer signals they may stop using the product.
+    criteria:
+      "true":  Mentions cancelling, competitors, or a failed evaluation.
+      "false": No indication of leaving.
