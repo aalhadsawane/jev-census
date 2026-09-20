@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env.local")
 
-from typesafe_sdk import Choice, Noul, Score, TypeSafeClient  # noqa: E402
+from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
 
 results = []
 

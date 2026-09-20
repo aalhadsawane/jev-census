@@ -1,0 +1,11 @@
+version: 1
+reference: support-triage.yaml
+variants:
+  - name: terse-criteria
+    overrides:
+      department:
+        criteria: { billing: Payments., technical: Bugs., sales: Pricing. }
+  - name: no-criteria
+    overrides:
+      is_urgent:
+        criteria: null

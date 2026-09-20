@@ -4,6 +4,83 @@ Divergences from the design docs, and why. Newest first.
 
 ---
 
+## 2026-09-21 — Phase P6 (quality) infrastructure complete and live-verified; gold-labelling is not
+
+Built `sampling.py` (T6.1), `scoring.py` (T6.2-T6.4), `report.py` (T6.5), `overrides.py` (T6.6),
+`schema_tune.py` (T6.7), and `ablation.py` (T6.8), plus the CLI surface: `census label`, `validate`,
+`report`, `review export`/`import`, `schema-tune`, `ablation`. 297 tests pass (up from 219 at the end
+of P5), including a full end-to-end integration test (`test_p6_integration.py`) driving the whole
+`run → label → validate → report → review export → review import` cycle through Typer's `CliRunner`
+against the fake client, plus live runs of `schema-tune` and `ablation` against the real API.
+
+**Read this before trusting the phase-exit claim below.** `05-P6-QUALITY.md`'s literal exit criterion
+is "every question in the demo question set has a gold set of ≥200 stratified labels." That number of
+labels requires sustained, genuine human judgment against real ticket content — it is not something
+this session produced, and nothing here should be read as claiming it did. What *is* done, and
+verified: every module and CLI command works correctly end-to-end, proven against small live-API runs
+where the "gold" labels were either self-consistent-with-the-model (explicitly for pipeline-mechanics
+testing only, never presented as validation) or, for T6.8, genuinely authored by hand with real
+judgment on deliberately simple synthetic tickets. Producing a real 200+-item gold set per question for
+the actual demo corpus is the honest remaining gap before P6's literal exit criterion is met, and it is
+a human task, not an engineering one — flagged explicitly rather than papered over with fabricated
+labels.
+
+**Real bugs found while building, not just new features:**
+
+1. **A genuine shape mismatch, not a fixture bug.** `overrides.py`'s `export_review_queue` called
+   `scoring.threshold_value`, which expects label-CSV row keys (`model_noul`), against raw cells from
+   `read_run_cells`, which use cells.parquet's own key names (`noul`). These are two different row
+   shapes that happen to share a similar purpose; forcing one function to silently accept both would
+   have been the actual bug. Fixed with a small cell-shaped variant local to `overrides.py`, documented
+   as a *shape* distinction, not a naming accident.
+2. **A `sed`-driven rename corrupted a string literal.** Renaming the private helper `_modal_level` to
+   the public `modal_level` (needed once `overrides.py` also required it) used a blind
+   `sed 's/_modal_level/modal_level/g'`, which also matched the substring `_modal_level` inside the
+   unrelated string literal `"model_modal_level"` (a label-CSV column name), corrupting it to
+   `"modelmodal_level"` in two places. Caught immediately by the full test suite failing; fixed by hand
+   and confirmed no other renames in the same session collided the same way. Worth remembering: a
+   blind rename-by-substring is unsafe near any name that is itself a substring of another identifier.
+3. **`reservoir_sample_corpus` didn't create its own output directory.** Surfaced immediately on the
+   first live `schema-tune` run (`FileNotFoundError` writing the sampled sub-corpus) — the function
+   assumed the caller had already created `results/schema_tune_runs/`; fixed to create it itself,
+   matching every other writer in this codebase.
+4. **Two test-fixture bugs, not code bugs, in the integration tests**, both caught by their own
+   assertions rather than silently passing: the synthetic "wrong answer" branch in
+   `test_p6_integration.py` used a modulus that fully overlapped the "unclear" branch's, so it never
+   actually fired — every question scored a trivial 1.00 until a `not all(acc == "1.00")` assertion was
+   added and the modulus separated. A second fixture used a placeholder `"OTHER_OPTION"` as a
+   deliberately-wrong `choice` gold answer, which the gold-file hygiene check (T6.2) correctly rejected
+   as not a real option — exactly the check working as designed, not a bug in it.
+
+**Design decisions made while implementing, not fully specified in `05-P6-QUALITY.md`:**
+
+- The manifest gained two fields — `id_field` and `projection_groups` (`{projection_id: [fields]}`) —
+  in both `scheduler.py`'s and `runner.py`'s manifest writers. `census label` needs to re-stream the
+  original source corpus to recover a question's projection-field values (cells.parquet only stores
+  answers, never source text) and needs to know which fields belong to a given `projection_id` without
+  re-reading the original question set YAML. `04-P5-PLANNER.md` had already named this as a P5 decision
+  ("readability is recovered by writing the map into manifest.json") but P5's own implementation never
+  actually added it — closed here since P6 is the first phase that needs it.
+- `review_queue.csv`'s column shape deliberately diverges from the label CSV's: no `stratum`/
+  `stratum_weight` (meaningless outside a validation sample) and `human_answer` instead of
+  `gold_answer`/`notes` (the review queue is a human deciding what a production answer *should be*,
+  not building a validation gold set — different vocabulary for a different task, even though
+  `05-P6-QUALITY.md`'s prose reads as "the same shape plus one column").
+- `census schema-tune` and `census ablation` are both implemented as the Scheduler run twice (or more)
+  against a small sampled sub-corpus sharing one `--census-dir`, rather than a parallel call-execution
+  path — an unchanged variant's matching questions hit the cache for free, for the same reason a
+  resumed `census run` does.
+
+**Live-verified, closing open questions H and I** in `00-JEV-API.md` with real measurements (full
+detail there): criteria verbosity cost nothing for `department` (agreement 1.000) but real accuracy for
+`is_urgent` when criteria were dropped entirely (agreement 0.900, below the 0.97 floor). The projection
+ablation, run against a deliberately constructed 12-document sample where a question's needed signal
+lived outside its declared projection, scored 0.50 (structurally blind) against 1.00 for full-record —
+not a case against projections, but a real, measured demonstration of what happens when one is scoped
+too narrowly for what its question actually needs.
+
+---
+
 ## 2026-09-20 — Phase P5 (planner) complete, live-verified including real chunking
 
 Built `planner.py` (T5.1, T5.2, T5.2b) and `chunking.py` (T5.4): `_process_one_document` in

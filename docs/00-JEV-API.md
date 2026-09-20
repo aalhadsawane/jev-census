@@ -292,5 +292,25 @@ cell (already in D9's provenance columns); no pre-pinning required.
 | B | Per-call limit on question count? Only 1–3 tested so far. | T0.2 |
 | D | Actual rate limits on the direct API; none hit in 6 light calls, real ceiling unknown. | T0.5 |
 | G | Are question ids billed, given they are not sent to the model? | T0.3 |
-| H | How much does criteria verbosity cost in accuracy? | Phase 6, `schema-tune` |
-| I | Does a projected state beat a full-record state on the same question? | Phase 6 |
+
+Resolved: *how much does criteria verbosity cost in accuracy?* (**H**, `census schema-tune`, live,
+2026-09-21). On a 30-document sample of the README's `support-triage.yaml`, shortening `department`'s
+criteria to one clause per option cost nothing (agreement 1.000, drift 0.008 — comfortably inside the
+0.95 floor). Dropping `is_urgent`'s criteria entirely (going from "optional but present" to "absent")
+did cost accuracy: agreement fell to 0.900 against the 0.97 floor, a real, measured failure — criteria
+are optional for `noul` per the contract, but *having* them is not free to discard. Full curve
+committed at `results/schema_tune.csv`; see `DECISIONS.md`.
+
+Resolved, with a scope caveat: *does a projected state beat a full-record state on the same question?*
+(**I**, `census ablation`, live, 2026-09-21). On a 12-document sample deliberately constructed so a
+`noul` question's urgency signal lived only in a `thread` field **outside** its declared
+`[subject, body]` projection, the projected condition scored 0.50 (structurally blind to the signal)
+against 1.00 for the full-record condition. This is not evidence that full-record beats projected in
+general — that would contradict jaggedness #5 (context rot) below, the entire reason projections exist.
+It is evidence of a narrower, more actionable claim: **a projection that omits a field the question
+actually needs silently blinds the question to it**, with no error, no low-confidence signal, nothing
+to distinguish it from a correctly-scoped projection returning a confident wrong answer. The fix is
+scoping projections to include what a question needs, not making them wider by default. A rerun on a
+sample where the projection's fields already cover the needed signal (the common, correctly-scoped
+case) would be expected to show projected performing at parity with full-record while costing fewer
+tokens — that comparison is the natural follow-up once a real gold-labelled run exists (P8).
