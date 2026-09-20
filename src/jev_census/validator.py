@@ -126,6 +126,32 @@ def _check_score(question: Question, errors: list[str]) -> None:
         errors.append(f"question '{question.id}': score requires at least 2 ordered levels")
 
 
+def _check_projection(question: Question, question_set: QuestionSet, errors: list[str]) -> None:
+    """T5.1 (04-P5-PLANNER.md): a question with no resolved projection has no
+    state to answer against, and a projection field that reaches the planner
+    with a typo sends `{"subjct": null}` to the model silently — this only
+    catches the structural cases (empty, duplicated, unresolved); whether the
+    field names actually exist on the corpus is a runtime check the planner
+    makes against the first document, since that needs the source open."""
+    if question.projection is not None and len(question.projection) == 0:
+        errors.append(
+            f"question '{question.id}': projection is empty; a question with no state "
+            "cannot be answered"
+        )
+        return
+    resolved = question_set.resolved_projection(question)
+    if len(resolved) == 0:
+        errors.append(
+            f"question '{question.id}': no projection, and the question set declares no default"
+        )
+        return
+    if len(resolved) != len(set(resolved)):
+        dupes = sorted({f for f in resolved if resolved.count(f) > 1})
+        errors.append(
+            f"question '{question.id}': projection has duplicate field name(s) {dupes}"
+        )
+
+
 def validate_question_set(question_set: QuestionSet) -> list[str]:
     """Validate every question. Returns non-fatal warnings; raises `ValidationError`
     with all fatal errors found."""
@@ -152,6 +178,7 @@ def validate_question_set(question_set: QuestionSet) -> list[str]:
 
         _check_proposition(question, errors)
         _check_counting_math_date(question, errors)
+        _check_projection(question, question_set, errors)
 
     if errors:
         raise ValidationError(errors)

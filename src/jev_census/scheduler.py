@@ -44,11 +44,20 @@ from .aimd import AIMDConcurrency
 from .cache import CachedCell, CellCache, cache_key
 from .cell import build_cell
 from .checkpoint import Checkpoint
+from .chunking import aggregate_chunk_answers, chunk_document
 from .client import JevConfigError, JevTransientError
 from .decoder import DecodeError, decode_answers
 from .failure import FailureClass, classify
 from .money import micro_usd_to_usd, tokens_to_micro_usd, usd_to_micro_usd
 from .normalizer import normalize
+from .planner import (
+    CallGroup,
+    ContextOverflowError,
+    plan_call_groups,
+    project_state,
+    split_for_context,
+    verify_projection_fields,
+)
 from .quarantine import QuarantineWriter
 from .question_set import Question, QuestionSet, load_question_set
 from .retry import RetryPolicy
@@ -182,12 +191,12 @@ async def _worker(
     worker_queue: asyncio.Queue,
     *,
     question_set: QuestionSet,
-    questions_by_id: dict[str, Question],
-    projection_fields: set[str],
+    call_groups: list[CallGroup],
     client: AsyncAskingClient,
     cache: CellCache,
     shard_writer: ShardWriter,
     checkpoint: Checkpoint,
+    quarantine: QuarantineWriter,
     run_id: str,
     config: SchedulerConfig,
     gate: _ConcurrencyGate,
@@ -204,12 +213,12 @@ async def _worker(
             await _process_one_document(
                 doc,
                 question_set=question_set,
-                questions_by_id=questions_by_id,
-                projection_fields=projection_fields,
+                call_groups=call_groups,
                 client=client,
                 cache=cache,
                 shard_writer=shard_writer,
                 checkpoint=checkpoint,
+                quarantine=quarantine,
                 run_id=run_id,
                 config=config,
                 gate=gate,
@@ -220,119 +229,213 @@ async def _worker(
             state.stop_event.set()
 
 
+async def _ask_batch(
+    *,
+    chunk_state: dict,
+    batch_questions: dict[str, Question],
+    questions_by_id_group: dict[str, Question],
+    client: AsyncAskingClient,
+    cache: CellCache,
+    config: SchedulerConfig,
+    gate: _ConcurrencyGate,
+    state: _SharedState,
+    answers_by_question: dict[str, list[tuple]],
+) -> str | None:
+    """One real API call for one chunk's missing-question batch. Updates
+    `answers_by_question` and the cache in place on success. Returns the
+    resolved model on success, or `None` if the document should be abandoned
+    (budget breach, exhausted retries, or a decode failure — every one of
+    these already accounts for itself in `state` before returning)."""
+    projected_state_tokens, projected_schema_tokens = estimate_call_tokens(chunk_state, batch_questions)
+    projected_tokens = projected_state_tokens + projected_schema_tokens
+    if state.spent_micro_usd() + tokens_to_micro_usd(projected_tokens) > state.budget_micro_usd:
+        state.budget_exhausted = True
+        state.stop_event.set()
+        return None
+
+    response = await _ask_with_retries(
+        client, chunk_state, batch_questions, config, gate, state, fatal_holder=state
+    )
+    if response is None:
+        return None  # exhausted retries or was skipped; already accounted for
+
+    resolved_model = response.model
+    input_tokens_new = response.usage.input_tokens or 0
+    state.total_input_tokens_charged += input_tokens_new
+    cache.record_model_resolution(config.model_alias, resolved_model)
+    cache.record_calibration(estimated_tokens=projected_tokens, actual_tokens=input_tokens_new)
+
+    try:
+        decoded = decode_answers(response, batch_questions)
+    except DecodeError:
+        state.documents_skipped += 1
+        return None
+
+    state.cache_misses_total += len(batch_questions)
+    for decoded_answer in decoded:
+        q = questions_by_id_group[decoded_answer.question_id]
+        key = cache_key(chunk_state, decoded_answer.question_id, q.body_hash, resolved_model)
+        cache.put(key, decoded_answer, resolved_model, input_tokens_new)
+        answers_by_question[decoded_answer.question_id].append((decoded_answer, input_tokens_new))
+
+    return resolved_model
+
+
+async def _process_one_call_group(
+    doc,
+    group: CallGroup,
+    *,
+    question_set: QuestionSet,
+    client: AsyncAskingClient,
+    cache: CellCache,
+    quarantine: QuarantineWriter,
+    run_id: str,
+    config: SchedulerConfig,
+    gate: _ConcurrencyGate,
+    state: _SharedState,
+) -> list | None:
+    """Everything one call group needs for one document: project the state,
+    chunk it if it doesn't fit alone (T5.4), ask every chunk (splitting the
+    question battery across several calls per chunk if the schema alone
+    doesn't fit — T5.2), and aggregate multi-chunk answers back into one
+    cell per question. Returns the group's cells, or `None` if the document
+    should be abandoned (already accounted for in `state`/`quarantine`)."""
+    questions_by_id_group = {q.id: q for q in group.questions}
+    state_dict = project_state(doc.fields, group)
+
+    try:
+        chunks = chunk_document(state_dict, group)
+    except ContextOverflowError as exc:
+        quarantine.write(
+            row_index=doc.meta.get("row_index", -1),
+            reason=f"state_exceeds_context: {exc}",
+            raw={"doc_id": doc.id, "projection_id": group.projection_id},
+        )
+        return None
+
+    chunk_count = len(chunks)
+    model_for_key = cache.resolve_model(config.model_alias)
+    answers_by_question: dict[str, list[tuple]] = {q.id: [] for q in group.questions}
+    group_had_new_call = False
+    resolved_model_group = model_for_key
+
+    for chunk_state in chunks:
+        hits: dict[str, CachedCell] = {}
+        misses: dict[str, Question] = {}
+        if model_for_key is not None:
+            for q in group.questions:
+                key = cache_key(chunk_state, q.id, q.body_hash, model_for_key)
+                cached = cache.get(key)
+                if cached is not None:
+                    hits[q.id] = cached
+                else:
+                    misses[q.id] = q
+        else:
+            misses = dict(questions_by_id_group)
+
+        for qid, cached_cell in hits.items():
+            answers_by_question[qid].append((cached_cell.answer, cached_cell.input_tokens))
+        state.cache_hits_total += len(hits)
+
+        if not misses:
+            continue
+
+        missing_group = CallGroup(
+            projection_id=group.projection_id, fields=group.fields, questions=tuple(misses.values())
+        )
+        try:
+            batches = split_for_context(missing_group, chunk_state)
+        except ContextOverflowError as exc:
+            quarantine.write(
+                row_index=doc.meta.get("row_index", -1),
+                reason=f"state_exceeds_context: {exc}",
+                raw={"doc_id": doc.id, "projection_id": group.projection_id},
+            )
+            return None
+
+        for batch_ids in batches:
+            batch_questions = {qid: misses[qid] for qid in batch_ids}
+            resolved_model = await _ask_batch(
+                chunk_state=chunk_state,
+                batch_questions=batch_questions,
+                questions_by_id_group=questions_by_id_group,
+                client=client,
+                cache=cache,
+                config=config,
+                gate=gate,
+                state=state,
+                answers_by_question=answers_by_question,
+            )
+            if resolved_model is None:
+                return None
+            resolved_model_group = resolved_model
+            group_had_new_call = True
+
+    call_id = str(uuid.uuid4()) if group_had_new_call else "cached"
+    ts = datetime.now(UTC)
+    cells = []
+    for q in group.questions:
+        per_chunk = answers_by_question[q.id]
+        if not per_chunk:
+            continue  # only reachable if a prior return already abandoned the document
+        total_tokens_for_q = sum(tokens for _, tokens in per_chunk)
+        final_answer = per_chunk[0][0] if chunk_count == 1 else aggregate_chunk_answers(
+            [answer for answer, _ in per_chunk]
+        )
+        model_for_cell = resolved_model_group if resolved_model_group is not None else "unknown"
+        cells.append(
+            build_cell(
+                final_answer,
+                doc_id=doc.id,
+                gate=question_set.resolved_gate(q),
+                projection_id=group.projection_id,
+                call_id=call_id,
+                run_id=run_id,
+                model=model_for_cell,
+                questionset_hash=question_set.questionset_hash,
+                question_body_hash=q.body_hash,
+                input_tokens=total_tokens_for_q,
+                ts=ts,
+                chunk_count=chunk_count,
+            )
+        )
+    return cells
+
+
 async def _process_one_document(
     doc,
     *,
     question_set: QuestionSet,
-    questions_by_id: dict[str, Question],
-    projection_fields: set[str],
+    call_groups: list[CallGroup],
     client: AsyncAskingClient,
     cache: CellCache,
     shard_writer: ShardWriter,
     checkpoint: Checkpoint,
+    quarantine: QuarantineWriter,
     run_id: str,
     config: SchedulerConfig,
     gate: _ConcurrencyGate,
     state: _SharedState,
 ) -> None:
-    state_dict = (
-        {field: doc.fields.get(field) for field in sorted(projection_fields)}
-        if projection_fields
-        else doc.fields
-    )
-
-    model_for_key = cache.resolve_model(config.model_alias)
-    hits: dict[str, CachedCell] = {}
-    misses: dict[str, Question] = {}
-    if model_for_key is not None:
-        for qid, question in questions_by_id.items():
-            key = cache_key(state_dict, qid, question.body_hash, model_for_key)
-            cached = cache.get(key)
-            if cached is not None:
-                hits[qid] = cached
-            else:
-                misses[qid] = question
-    else:
-        misses = dict(questions_by_id)
-
-    resolved_model = model_for_key
-    input_tokens_new = 0
-    call_id = "cached"
-    decoded_new = []
-
-    if misses:
-        projected_state_tokens, projected_schema_tokens = estimate_call_tokens(state_dict, misses)
-        projected_tokens = projected_state_tokens + projected_schema_tokens
-        if state.spent_micro_usd() + tokens_to_micro_usd(projected_tokens) > state.budget_micro_usd:
-            state.budget_exhausted = True
-            state.stop_event.set()
-            return
-
-        response = await _ask_with_retries(
-            client, state_dict, misses, config, gate, state, fatal_holder=state
+    all_cells = []
+    for group in call_groups:
+        group_cells = await _process_one_call_group(
+            doc,
+            group,
+            question_set=question_set,
+            client=client,
+            cache=cache,
+            quarantine=quarantine,
+            run_id=run_id,
+            config=config,
+            gate=gate,
+            state=state,
         )
-        if response is None:
-            return  # exhausted retries or was skipped; already accounted for
+        if group_cells is None:
+            return  # abandoned: budget breach, retries exhausted, decode failure, or quarantined
+        all_cells.extend(group_cells)
 
-        resolved_model = response.model
-        input_tokens_new = response.usage.input_tokens or 0
-        state.total_input_tokens_charged += input_tokens_new
-        cache.record_model_resolution(config.model_alias, resolved_model)
-        cache.record_calibration(estimated_tokens=projected_tokens, actual_tokens=input_tokens_new)
-
-        try:
-            decoded_new = decode_answers(response, misses)
-        except DecodeError:
-            state.documents_skipped += 1
-            return
-
-        call_id = str(uuid.uuid4())
-        for decoded_answer in decoded_new:
-            q = questions_by_id[decoded_answer.question_id]
-            key = cache_key(state_dict, decoded_answer.question_id, q.body_hash, resolved_model)
-            cache.put(key, decoded_answer, resolved_model, input_tokens_new)
-
-    ts = datetime.now(UTC)
-    cells = []
-    for qid, cached_cell in hits.items():
-        q = questions_by_id[qid]
-        cells.append(
-            build_cell(
-                cached_cell.answer,
-                doc_id=doc.id,
-                gate=question_set.resolved_gate(q),
-                projection_id="p0",
-                call_id="cached",
-                run_id=run_id,
-                model=cached_cell.model,
-                questionset_hash=question_set.questionset_hash,
-                question_body_hash=q.body_hash,
-                input_tokens=cached_cell.input_tokens,
-                ts=ts,
-            )
-        )
-    for decoded_answer in decoded_new:
-        q = questions_by_id[decoded_answer.question_id]
-        cells.append(
-            build_cell(
-                decoded_answer,
-                doc_id=doc.id,
-                gate=question_set.resolved_gate(q),
-                projection_id="p0",
-                call_id=call_id,
-                run_id=run_id,
-                model=resolved_model,
-                questionset_hash=question_set.questionset_hash,
-                question_body_hash=q.body_hash,
-                input_tokens=input_tokens_new,
-                ts=ts,
-            )
-        )
-
-    state.cache_hits_total += len(hits)
-    state.cache_misses_total += len(misses)
-
-    finalized = shard_writer.add(cells)
+    finalized = shard_writer.add(all_cells)
     state.documents_processed += 1
     if finalized:
         checkpoint.write(
@@ -425,7 +528,22 @@ async def _report_progress(
 
 async def run_scheduled(config: SchedulerConfig, client: AsyncAskingClient) -> RunResult:
     question_set = load_question_set(config.questions_path)
-    questions_by_id = {q.id: q for q in question_set.questions}
+    call_groups = plan_call_groups(question_set)
+
+    # T5.1's runtime check: every projection field must actually be a column
+    # in the corpus, checked once against the first document (04-P5-PLANNER.md
+    # -- a corpus with ragged columns is a source problem; per-document
+    # checking would cost a dict scan per call for a guarantee the first row
+    # already gives). An empty corpus has nothing to check against.
+    first_doc_fields: set[str] = set()
+    for doc in normalize(read_source(config.input_path), id_field=config.id_field):
+        first_doc_fields = set(doc.fields.keys())
+        break
+    if first_doc_fields:
+        try:
+            verify_projection_fields(call_groups, first_doc_fields)
+        except ValueError as exc:
+            raise RunnerError(str(exc)) from exc
 
     if config.resume_run_id is not None:
         run_id = config.resume_run_id
@@ -465,10 +583,6 @@ async def run_scheduled(config: SchedulerConfig, client: AsyncAskingClient) -> R
     state.total_input_tokens_charged = (
         prior_checkpoint["total_input_tokens_charged"] if prior_checkpoint else 0
     )
-
-    projection_fields: set[str] = set()
-    for q in question_set.questions:
-        projection_fields.update(question_set.resolved_projection(q))
 
     # Unsupported extensions fail loudly right here, same as read_source
     # would inside _docs_iter() — no reason to defer that failure.
@@ -513,12 +627,12 @@ async def run_scheduled(config: SchedulerConfig, client: AsyncAskingClient) -> R
                 _worker(
                     queue,
                     question_set=question_set,
-                    questions_by_id=questions_by_id,
-                    projection_fields=projection_fields,
+                    call_groups=call_groups,
                     client=client,
                     cache=cache,
                     shard_writer=shard_writer,
                     checkpoint=checkpoint,
+                    quarantine=quarantine,
                     run_id=run_id,
                     config=config,
                     gate=gate,

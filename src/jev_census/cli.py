@@ -20,6 +20,8 @@ from rich.console import Console
 from .client import AsyncJevClient, JevConfigError
 from .estimate import DEFAULT_SAMPLE_SIZE, format_estimate
 from .estimate import estimate as run_estimate
+from .planner import plan_call_groups
+from .question_set import load_question_set
 from .runner import RunnerError
 from .scheduler import SchedulerConfig, format_progress, run_scheduled
 
@@ -92,6 +94,16 @@ def run(
         if not os.environ.get("TYPESAFE_API_KEY"):
             console.print("[red]TYPESAFE_API_KEY not set (checked environment and .env.local)[/red]")
             raise typer.Exit(code=1)
+
+    # T5.3: the call-group multiplier is real money, so it's visible before
+    # any call goes out, not only in the summary afterwards.
+    question_set = load_question_set(questions)
+    call_groups = plan_call_groups(question_set)
+    if len(call_groups) > 1:
+        console.print(
+            f"[cyan]{len(question_set.questions)} questions · {len(call_groups)} call groups · "
+            f"state sent {len(call_groups)}x per document[/cyan]"
+        )
 
     config = SchedulerConfig(
         input_path=input,

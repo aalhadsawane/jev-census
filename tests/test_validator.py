@@ -9,14 +9,25 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _qs(**questions_kwargs) -> QuestionSet:
-    """Build a minimal valid QuestionSet, then override one question's fields."""
+    """Build a minimal valid QuestionSet, then override one question's fields.
+    Carries a default projection (T5.1 requires every question resolve to a
+    non-empty one) so tests unrelated to projection validation don't have to
+    think about it; tests that specifically exercise projection rules pass
+    `projection=...` themselves to override this default."""
     base_question = {
         "id": "q1",
         "type": "noul",
         "instructions": "The message is a complaint.",
     }
     base_question.update(questions_kwargs)
-    return QuestionSet.model_validate({"version": 1, "name": "t", "questions": [base_question]})
+    return QuestionSet.model_validate(
+        {
+            "version": 1,
+            "name": "t",
+            "defaults": {"projection": ["body"]},
+            "questions": [base_question],
+        }
+    )
 
 
 def test_valid_readme_example_has_no_errors():
@@ -122,3 +133,56 @@ def test_empty_instructions_rejected():
     with pytest.raises(ValidationError) as exc:
         validate_question_set(qs)
     assert any("must not be empty" in e for e in exc.value.errors)
+
+
+# --- T5.1: projection rules -------------------------------------------------
+
+
+def test_question_with_no_projection_and_no_default_rejected():
+    qs = QuestionSet.model_validate(
+        {
+            "version": 1,
+            "name": "t",
+            "questions": [
+                {"id": "q1", "type": "noul", "instructions": "The message is a complaint."}
+            ],
+        }
+    )
+    with pytest.raises(ValidationError) as exc:
+        validate_question_set(qs)
+    assert any("no projection, and the question set declares no default" in e for e in exc.value.errors)
+
+
+def test_question_with_empty_projection_list_rejected():
+    qs = _qs(projection=[])
+    with pytest.raises(ValidationError) as exc:
+        validate_question_set(qs)
+    assert any("projection is empty" in e for e in exc.value.errors)
+
+
+def test_question_with_duplicate_projection_fields_rejected():
+    qs = _qs(projection=["body", "body"])
+    with pytest.raises(ValidationError) as exc:
+        validate_question_set(qs)
+    assert any("duplicate field name" in e for e in exc.value.errors)
+
+
+def test_question_projection_overrides_default_and_is_valid():
+    qs = _qs(projection=["subject", "body", "thread"])
+    warnings = validate_question_set(qs)
+    assert warnings == []
+
+
+def test_question_inherits_default_projection_when_unset():
+    qs = QuestionSet.model_validate(
+        {
+            "version": 1,
+            "name": "t",
+            "defaults": {"projection": ["body"]},
+            "questions": [
+                {"id": "q1", "type": "noul", "instructions": "The message is a complaint."}
+            ],
+        }
+    )
+    warnings = validate_question_set(qs)
+    assert warnings == []

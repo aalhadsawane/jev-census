@@ -1,0 +1,28 @@
+version: 1
+name: support-triage-two-projections
+defaults:
+  projection: [subject, body]
+
+questions:
+  - id: is_urgent
+    type: noul
+    instructions: The customer states or implies the problem is time-sensitive.
+    criteria:
+      "true":  Blocked work, money at risk, or an explicit deadline.
+      "false": A question or request with no stated time pressure.
+
+  - id: department
+    type: choice
+    instructions: The team that should handle this ticket.
+    criteria:
+      billing:   Payments, invoicing, refunds, payouts.
+      technical: Bugs, outages, integrations, API errors.
+      sales:     Pricing, upgrades, new accounts, renewals.
+
+  - id: thread_went_hostile
+    type: noul
+    projection: [subject, body, thread]
+    instructions: The conversation became hostile after the first reply.
+    criteria:
+      "true":  Later messages contain insults, threats, or all-caps anger.
+      "false": The tone stayed civil throughout.

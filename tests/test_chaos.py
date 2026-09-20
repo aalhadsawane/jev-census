@@ -4,10 +4,20 @@ Runs `census run` as a real OS subprocess (so `kill -9` means something) with
 `CENSUS_FAKE_CLIENT=1` — the deterministic in-process fake from fakes.py, so
 this never touches the network or costs anything, per the Testing rules in
 02-BUILD-PLAN.md ("Tests never make live API calls").
+
+The "clean" comparison run goes through `run_scheduled` (the Scheduler) —
+the same code path `census run` actually uses, and (since P5) the same code
+path that plans real call groups and assigns hash-based `projection_id`s.
+`runner.py`'s sequential `run_census` is kept only as a pure reference
+implementation frozen at single-group planning (always `projection_id="p0"`)
+and is deliberately not used here: comparing against it would fail on
+`projection_id` alone for a reason that has nothing to do with resume
+correctness, the property this test actually checks.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -18,8 +28,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from jev_census.runner import RunConfig, run_census
-from tests.fakes import FakeJevClient
+from jev_census.scheduler import SchedulerConfig, run_scheduled
+from tests.fakes import FakeAsyncJevClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -144,7 +154,7 @@ def test_kill_nine_then_resume_matches_a_clean_run(tmp_path):
     # Clean, uninterrupted run of the same corpus/questions, for comparison.
     clean_census_dir = tmp_path / "census-clean"
     clean_out = tmp_path / "results-clean"
-    clean_config = RunConfig(
+    clean_config = SchedulerConfig(
         input_path=corpus,
         questions_path=questions_path,
         budget_usd=1000.0,
@@ -153,7 +163,7 @@ def test_kill_nine_then_resume_matches_a_clean_run(tmp_path):
         id_field="ticket_id",
         shard_size=5,
     )
-    run_census(clean_config, FakeJevClient())
+    asyncio.run(run_scheduled(clean_config, FakeAsyncJevClient()))
 
     resumed_rows = _rows_without_provenance(killed_out / "cells.parquet")
     clean_rows = _rows_without_provenance(clean_out / "cells.parquet")

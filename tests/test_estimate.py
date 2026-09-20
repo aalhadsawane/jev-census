@@ -107,3 +107,58 @@ def test_format_estimate_empty_corpus_does_not_crash():
     )
     text = format_estimate(result)
     assert "0 documents" in text
+
+
+# --- T5.3: per-group breakdown ---------------------------------------------
+
+
+def _corpus_with_thread(tmp_path: Path, n: int = 30) -> Path:
+    rows = [
+        {
+            "ticket_id": f"T-{i}",
+            "subject": f"subject line number {i}",
+            "body": f"This is a somewhat longer support ticket body for row {i}. " * 3,
+            "thread": f"Full reply thread text for ticket {i}. " * 5,
+        }
+        for i in range(n)
+    ]
+    path = tmp_path / "tickets.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    return path
+
+
+def test_two_projection_question_set_produces_two_groups(tmp_path):
+    corpus = _corpus_with_thread(tmp_path)
+    result = estimate(
+        corpus, FIXTURES / "support-triage-two-projections.yaml", id_field="ticket_id"
+    )
+    assert result.call_group_count == 2
+    assert len(result.groups) == 2
+    assert result.groups[0].fields == ("body", "subject")
+    assert result.groups[1].fields == ("body", "subject", "thread")
+    assert result.groups[0].question_count == 2
+    assert result.groups[1].question_count == 1
+
+
+def test_single_group_estimate_output_unchanged_by_p5(tmp_path):
+    """A one-projection question set's `format_estimate` output must stay
+    byte-identical to pre-P5 -- no per-group lines, no 'Nx' suffix
+    (04-P5-PLANNER.md T5.3)."""
+    corpus = _corpus(tmp_path, n=50)
+    result = estimate(corpus, FIXTURES / "support-triage.yaml", id_field="ticket_id")
+    text = format_estimate(result)
+    assert "call group" in text and "call groups" not in text
+    assert "state sent" not in text
+    assert "group " not in text.split("\n")[0]  # no per-group breakout lines
+
+
+def test_two_group_estimate_output_shows_multiplier_and_breakdown(tmp_path):
+    corpus = _corpus_with_thread(tmp_path)
+    result = estimate(
+        corpus, FIXTURES / "support-triage-two-projections.yaml", id_field="ticket_id"
+    )
+    text = format_estimate(result)
+    assert "2 call groups" in text
+    assert "state sent 2x per document" in text
+    assert result.groups[0].projection_id in text
+    assert result.groups[1].projection_id in text

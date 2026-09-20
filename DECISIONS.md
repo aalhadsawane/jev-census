@@ -4,6 +4,70 @@ Divergences from the design docs, and why. Newest first.
 
 ---
 
+## 2026-09-20 — Phase P5 (planner) complete, live-verified including real chunking
+
+Built `planner.py` (T5.1, T5.2, T5.2b) and `chunking.py` (T5.4): `_process_one_document` in
+`scheduler.py` now loops over real `CallGroup`s instead of one hardcoded `projection_id="p0"` union
+of every question's fields. `runner.py` (the sequential reference implementation) is deliberately
+untouched — it stays frozen at single-group planning, per `04-P5-PLANNER.md`.
+
+**T5.2b, measured before anything depended on it (Rule Zero).** Ramped a single-field state against
+a minimal `noul` question until the live API refused: 163,000 chars / 32,872 `usage.input_tokens`
+succeeded; 164,000 chars failed with a plain `400 max_tokens_exceeded` — not a `422`. That matters:
+`client.py` classifies `400` as fatal (same bucket as `401`/`422`), so a context overflow that
+reaches the API aborts the whole run rather than being retried or quarantined. `01-DESIGN.md`'s
+"chunk or quarantine" is therefore enforced entirely *proactively* by the planner, never reactively.
+Recorded in `00-JEV-API.md`; `CONTEXT_LIMIT_TOKENS = 32_768` in `planner.py`.
+
+**Real bug found while building T5.4, not caught by the unit tests first.** `chunk_document`'s
+original chunk-sizing math left room for only the group's *cheapest* question, on the theory that
+`split_for_context` would handle batching the rest. It doesn't work: once a chunk is sized that
+tight, any question in the group *larger* than the cheapest one legitimately can't fit alongside it,
+and `split_for_context` (correctly) raises `ContextOverflowError` for it — not because the document
+is unchunkable, but because the chunk itself was undersized. Fixed by sizing chunks against the
+group's *largest* question instead, which guarantees every question fits in at least one call per
+chunk. Caught by an end-to-end scheduler test (`test_long_document_is_chunked_and_aggregated_end_to_end`)
+that exercises the real pipeline rather than `chunking.py` in isolation — the unit tests alone, which
+each picked a single question size, never exposed the interaction between the two functions.
+
+A second, smaller issue surfaced by the same test: `chunk_document`'s field-budget arithmetic summed
+each field's token estimate independently, but a merged JSON object's real token count isn't
+perfectly additive (structural overhead: braces, keys, commas), so a chunk sized right at the
+boundary could overshoot by a handful of tokens. Fixed by measuring the "other fields" overhead
+against the actual combined-state estimate rather than assuming additivity, plus a flat 64-token
+safety buffer on top of the already-applied 15% margin.
+
+**A test-comparison artifact, not a runner bug, initially looked like real corruption.**
+`test_chaos.py`'s "clean" comparison run used `runner.py`'s sequential `run_census` (still
+`projection_id="p0"`), while the killed/resumed run goes through the Scheduler, which now assigns
+real hash-based projection ids. Every cell's `projection_id` differed between the two, producing a
+huge, alarming diff that briefly looked like the aggregation path was corrupting `choice` answers.
+Root-caused by reproducing outside pytest and correlating with `chunk_count`/`confidence_source` in
+the diff. Fixed by switching the "clean" comparison to `run_scheduled` (the same code path `census
+run` actually uses, and the same one `test_sigint.py` already used) — comparing against the frozen
+sequential reference implementation stopped being meaningful for a property (`projection_id` naming)
+that legitimately differs between them now.
+
+**Live-verified three ways**, not just against the fake client:
+1. `census estimate` on a 50-row corpus with a real two-projection question set reproduced the
+   worked example's exact output shape: `3 questions · 2 call groups · state sent 2x per document`,
+   with per-group field/token breakdown lines.
+2. The same corpus run live end to end: the two-projection set cost $0.0018 (42,584 input tokens)
+   against $0.0012 (27,847 tokens) for the same corpus with the original single-projection set — a
+   real 53% cost increase from sending the document twice, confirming the multiplier is not just a
+   printed number.
+3. A single real document (173,800 chars, well over the measured limit) run against the live API:
+   split into 2 real chunks, all 4 questions correctly aggregated back to one cell each, every cell
+   marked `chunk_count=2` and `confidence_source="derived"` — including the `choice` and `score`
+   questions, whose per-chunk confidence was model-reported but whose aggregate, correctly, is not.
+
+219 tests pass (up from 179 at the end of P4), including 19 new tests specific to P5 (planner
+grouping/splitting properties, chunk aggregation per type against hand-computed values, and two
+scheduler-level integration tests — real multi-chunk aggregation and the quarantine path — that the
+unit-level tests alone would not have caught).
+
+---
+
 ## 2026-09-20 — Phase P4 (scale) complete, 120k rows unattended
 
 Built `client.py`'s `AsyncJevClient`, `failure.py`, `retry.py`, `aimd.py`, and `scheduler.py` (T4.1–T4.5):

@@ -199,12 +199,14 @@ classifying; `census` makes the result trustworthy, affordable and reproducible.
 
 ## Status
 
-**Engine built, quality phase next.** Phases P0–P4 are complete and merged: `census run` and
+**Engine built, quality phase next.** Phases P0–P5 are complete and merged: `census run` and
 `census estimate` work end to end against the live API, survive `kill -9` and `SIGINT`, cache at cell
-granularity, cap spend in integer micro-dollars, and have run 120,000 documents unattended. P5–P8 —
-projections, the validation report, packaging and the launch analysis — are specified and not yet
-built, so the figures above are still design projections rather than measured numbers. P7 replaces
-each of them with output from a command in this README.
+granularity, cap spend in integer micro-dollars, have run 120,000 documents unattended, and plan real
+call groups from a question set's declared projections — a two-projection question set genuinely
+sends two calls per document, live-verified at a measured 53% cost increase for the extra call. P6–P8
+— the validation report, packaging and the launch analysis — are specified and not yet built, so the
+figures above are still design projections rather than measured numbers. P7 replaces each of them
+with output from a command in this README.
 
 | Document | What it holds |
 |---|---|
