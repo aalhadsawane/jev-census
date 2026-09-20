@@ -22,7 +22,7 @@ from rich.console import Console
 from . import report as report_module
 from .ablation import format_ablation_report, full_record_variant, run_ablation_comparison
 from .client import AsyncJevClient, JevConfigError
-from .estimate import DEFAULT_SAMPLE_SIZE, format_estimate
+from .estimate import DEFAULT_SAMPLE_SIZE, format_count, format_estimate
 from .estimate import estimate as run_estimate
 from .overrides import export_review_queue, import_overrides, read_review_queue
 from .planner import plan_call_groups
@@ -30,6 +30,7 @@ from .question_set import load_question_set
 from .runner import RunnerError
 from .sampling import (
     DEFAULT_STRATA,
+    label_rows_from_cells,
     projection_fields_for_question,
     read_label_csv,
     read_manifest,
@@ -576,6 +577,108 @@ def ablation(
     console.print()
     console.print(report_text)
     console.print(f"wrote {report_path}")
+
+
+DEMO_BUDGET_USD = 0.25
+
+
+def _read_demo_gold(path: Path) -> list[dict]:
+    """The bundled demo gold set's own, minimal shape: `doc_id,gold_answer`
+    only -- no `stratum_weight` (it's a small fixed convenience sample, not
+    a corpus-representative one) and no frozen model answer (those are
+    read fresh from whatever the just-completed demo run produced, via
+    `label_rows_from_cells`, so the bundled labels never go stale)."""
+    import csv as csv_module
+
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [dict(row) for row in csv_module.DictReader(handle)]
+
+
+@app.command()
+def demo(
+    budget: float = typer.Option(DEMO_BUDGET_USD, "--budget", help="Spending cap in USD"),
+    out: Path = typer.Option(Path("demo-results"), "--out", file_okay=False),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the estimate and stop -- never calls the API"
+    ),
+) -> None:
+    """T7.2: one command, no clone, no config. Runs the bundled Hacker News
+    demo corpus end to end -- estimate, run, validate against a bundled
+    gold set -- against real data shipped inside the package."""
+    demo_dir = Path(__file__).parent / "demo_data"
+    corpus = demo_dir / "stories.parquet"
+    questions = demo_dir / "questions.yaml"
+    gold_dir = demo_dir / "gold"
+
+    question_set = load_question_set(questions)
+    est = run_estimate(corpus, questions, id_field="id")
+    group_word = "call groups" if est.call_group_count != 1 else "call group"
+    console.print()
+    console.print(
+        f"  demo: {est.document_count:,} Hacker News stories · {est.question_count} questions · "
+        f"{est.call_group_count} {group_word}"
+    )
+    console.print(
+        f"  estimate: {format_count(est.total_tokens)} tokens ≈ ${est.estimated_cost_usd:.2f} · "
+        f"budget ${budget:.2f}"
+    )
+    console.print()
+
+    if dry_run:
+        console.print("  --dry-run: stopping before any API call")
+        return
+
+    using_fake_client = os.environ.get("CENSUS_FAKE_CLIENT") == "1"
+    if not using_fake_client:
+        load_dotenv(Path.cwd() / ".env.local")
+        if not os.environ.get("TYPESAFE_API_KEY"):
+            console.print("[red]TYPESAFE_API_KEY not set (checked environment and .env.local)[/red]")
+            raise typer.Exit(code=1)
+
+    census_dir = out / ".census"
+    config = SchedulerConfig(
+        input_path=corpus,
+        questions_path=questions,
+        budget_usd=budget,
+        out_dir=out,
+        census_dir=census_dir,
+        id_field="id",
+        on_progress=lambda snapshot: console.print(format_progress(snapshot)),
+    )
+    client = _build_async_client()
+    result = asyncio.run(run_scheduled(config, client))
+
+    table = pq.read_table(result.out_path)
+    console.print(f"  wrote {result.out_path}          {table.num_rows:,} cells")
+
+    run_dir = census_dir / "runs" / result.run_id
+    gates = {q.id: question_set.resolved_gate(q) for q in question_set.questions}
+    scores = []
+    for gold_path in sorted(gold_dir.glob("*.csv")):
+        question_id = gold_path.stem
+        question = next((q for q in question_set.questions if q.id == question_id), None)
+        if question is None:
+            continue
+        gold_rows = _read_demo_gold(gold_path)
+        cells_by_doc_id = {c["doc_id"]: c for c in read_run_cells(run_dir, question_id, include_chunked=True)}
+        rows = label_rows_from_cells(gold_rows, cells_by_doc_id, default_weight=1.0)
+        scores.append(score_question(rows, question_id=question_id, question_type=question.type))
+
+    report_text = report_module.render_validation_report(scores, gates)
+    report_path = out / "validation_report.md"
+    report_path.write_text(report_text, encoding="utf-8")
+
+    verdicts = [
+        report_module.compute_verdict(s, gate=gates.get(s.question_id, "strict")) for s in scores
+    ]
+    passed = sum(1 for v in verdicts if v == "PASS")
+    exploratory = sum(1 for v in verdicts if "exploratory" in v)
+    console.print(
+        f"  wrote {report_path}   {len(scores)} questions, {passed} PASS, {exploratory} exploratory"
+    )
+    console.print()
+    console.print(f'  next:  duckdb -c "SELECT * FROM \'{result.out_path}\' LIMIT 5"')
+    console.print("         docs/RECIPES.md has the long→wide pivot and thresholding queries")
 
 
 if __name__ == "__main__":

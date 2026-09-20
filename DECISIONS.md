@@ -4,6 +4,86 @@ Divergences from the design docs, and why. Newest first.
 
 ---
 
+## 2026-09-21 — Phase P7 (adoption) complete, live-verified, one real bug found by real scale
+
+Built per `06-P7-ADOPTION.md` (T7.1–T7.5): `scripts/verify_clean_install.sh`, package-data wiring for a
+bundled demo, `census demo`, three example question sets under `examples/`, `docs/RECIPES.md` with an
+executable test, and a README rewrite carrying only numbers a command in it can regenerate
+(`docs/PROVENANCE.md`, `scripts/readme_numbers.py`). 307 tests pass (up from 297 at the end of P6, plus
+the clean-install and recipes acceptance scripts, which aren't part of the normal suite by design —
+`scripts/verify_clean_install.sh` needs a real `pip install`/venv cycle too slow and too
+environment-dependent for every `pytest` run).
+
+**T7.1.** `pyproject.toml` gained `[tool.setuptools.package-data]` for `jev_census/demo_data/**/*` — 
+without it the bundled corpus, gold set, and question set silently vanish from the wheel, failing only
+for people who installed the package, which is exactly the population this phase exists for. The
+`tests.fakes` import trap the spec named was already function-local (T7.1 only needed a regression
+test, `test_packaging.py`, guarding it via AST inspection — a real refactor that hoists it to module
+scope now fails fast rather than only breaking installed copies silently).
+
+`scripts/verify_clean_install.sh` hit a real environment issue on the first run, not a bug in the
+project: this system's Python is externally-managed (PEP 668), so a bare `pip install build` against
+the system interpreter is refused outright — increasingly the default on modern macOS/Linux, not a
+local quirk. Fixed by building inside a venv too, not just installing into one.
+
+**T7.2.** The demo corpus is 1,910 real Hacker News story titles, fetched live via the public HN API
+(`src/jev_census/demo_data/SOURCE.md` has the full method and licence). The bundled gold set (30
+documents, hand-labelled with genuine judgment, disclosed as smaller than a production-scale
+sample) is scored against **fresh** cells from whatever the current demo run just produced — not frozen
+model answers from whenever the gold set was authored — via a new shared helper,
+`sampling.label_rows_from_cells` (promoted out of `ablation.py`, which had its own private copy of the
+identical join), so the bundled labels never go stale relative to model changes.
+
+**T7.2's timing claim, actually timed, not asserted:** a full cycle — build wheel, create a venv, install,
+run `census demo` live against the real API — took **60 seconds total** (11s install, 49s demo), well
+under the 5-minute budget. `census demo`'s own live run: $0.0569 spent, 9,550 cells, 5 questions on
+1,910 documents, **3 PASS, 1 exploratory, 1 genuine disclosed FAIL** (`topic_area` at 0.83 against the
+0.90 gate) — left as measured, not tuned away, matching the project's own stated values about
+disclosing failures.
+
+**T7.3 — a real bug, found only because the long-form example used real long documents.** `axios`'s
+README (~108,000 characters, a real file) was quarantined instead of chunked on the first live run:
+`chunk_document`'s char-count-based sizing (`chars_per_chunk = token_budget * CHARS_PER_TOKEN`) assumed
+a flat 4 characters per token, but `estimate_tokens()` actually measures the chunk's **JSON-serialized**
+size — and JSON-escaping (every literal newline becomes `\n`, every `"` becomes `\"`) inflated this real
+document by 3.2% once serialized, enough at this scale to push a chunk that "fit" by the naive
+character count over budget once actually measured. Fixed by verifying the real `estimate_tokens()`
+result after slicing and shrinking the chunk if it disagrees, rather than trusting the char-based
+conversion. This is exactly the kind of bug a synthetic "word " × N test fixture (uniform, no
+escaping) structurally cannot expose — P5's own chunking tests used exactly that kind of fixture and
+never caught it; only a real document with real punctuation did. Regression test added using text
+deliberately heavy in quotes/backslashes/newlines. After the fix, `axios` splits into 2 real chunks
+live, every cell for it correctly carries `chunk_count=2` and `confidence_source=derived`.
+
+The three examples' gold sets (30, 30, 18 documents respectively) are all real, hand-judged, and
+honestly disclosed as smaller than `05-P6-QUALITY.md`'s recommended 150–250 per question — the same
+disclosed gap carried over from P6's own entry below. The long-form example's 18-document sample
+correctly reports every question as `INSUFFICIENT` (T6.2's own rule, `n < 30`); left as measured rather
+than padded to force a verdict, because that is what the tool is supposed to do when the evidence
+doesn't support a real number yet.
+
+**T7.4.** DuckDB recipes needed one care point: `to_timestamp(unix_seconds)`'s timezone lookup requires
+`pytz` installed for DuckDB's Python bindings specifically (irrelevant to the standalone `duckdb` CLI,
+but this project's tests run through the Python bindings) — used `epoch_ms(unix_seconds * 1000)`
+instead, which needs nothing extra either way. `01-DESIGN.md`'s on-disk layout has always specified a
+`documents.parquet` (source passthrough columns, joined on `doc_id`) that no phase has ever actually
+implemented; the time-series recipe needed exactly that join, so it joins back to the user's own source
+corpus instead (which they always have, since they supplied it as `--input`) and says so explicitly —
+a real, disclosed gap, not silently worked around.
+
+**T7.5.** Every number drafted for the README from memory during writing was checked against the real,
+regenerated value before being committed — and several were wrong on the first pass (an estimate
+block's token counts, several `cells.parquet` example rows) until corrected against
+`scripts/readme_numbers.py`'s actual output and the real committed example data. That script exists
+precisely so this checking is mechanical rather than something a reviewer has to trust was done by
+hand.
+
+**What T7.3/T7.2's gold sets are not**: a validated, production-scale claim. Same honest boundary as
+P6's own entry below — real software, real live measurements, small real samples, explicitly not
+inflated to look like more than they are.
+
+---
+
 ## 2026-09-21 — Phase P6 (quality) infrastructure complete and live-verified; gold-labelling is not
 
 Built `sampling.py` (T6.1), `scoring.py` (T6.2-T6.4), `report.py` (T6.5), `overrides.py` (T6.6),

@@ -8,8 +8,18 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
+build/
+dist/
 
-# data / local run state
+# local run state (never committed, wherever it's produced)
 .census/
-results/
+# a plain `census run --out results` at the repo root is a local test run;
+# examples/*/results/ is different -- committed output, excepted below.
+/results/
+
+# data files are ignored by default -- a corpus a user points --input at is
+# their own. The bundled demo corpus and the example corpora (T7.2, T7.3)
+# are explicit, deliberate exceptions.
 *.parquet
+!src/jev_census/demo_data/**/*.parquet
+!examples/**/*.parquet

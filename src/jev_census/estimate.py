@@ -149,7 +149,7 @@ def estimate(
     )
 
 
-def _format_count(n: float) -> str:
+def format_count(n: float) -> str:
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
     if n >= 1_000:
@@ -199,7 +199,7 @@ def format_estimate(result: EstimateResult) -> str:
                 f"state {g.avg_state_tokens:.0f}  schema {g.avg_schema_tokens:.0f}"
             )
     lines.append(
-        f"  total:       {_format_count(result.total_tokens)} tokens  ≈  ${result.estimated_cost_usd:.2f}"
+        f"  total:       {format_count(result.total_tokens)} tokens  ≈  ${result.estimated_cost_usd:.2f}"
     )
     lines.append(
         f"  runtime:     {_format_runtime(result.estimated_runtime_seconds)} at {ASSUMED_DOCS_PER_SECOND} docs/s"

@@ -104,6 +104,19 @@ def chunk_document(
         end = min(len(text), start + chars_per_chunk)
         chunk_state = dict(other_fields)
         chunk_state[split_field] = text[start:end]
+        # chars_per_chunk assumes chars_per_chunk / CHARS_PER_TOKEN tokens,
+        # but estimate_tokens() measures the CHUNK STATE'S JSON SERIALIZATION
+        # (`{"body": "..."}`), not the raw text length -- and JSON-escaping
+        # (every literal newline becomes `\n`, every `"` becomes `\"`, and
+        # so on) inflates real prose by a few percent depending on how much
+        # punctuation it has. A real 108k-character document (axios's
+        # README, live) measured 3.2% JSON overhead -- enough, at this
+        # scale, to push a chunk that "fit" by the raw char/4 approximation
+        # genuinely over the token budget once actually serialized. Verify
+        # the real estimate and shrink rather than trust the conversion.
+        while estimate_tokens(chunk_state) > budget_for_split_field and end > start + 1:
+            end -= max(1, (end - start) // 10)
+            chunk_state[split_field] = text[start:end]
         chunks.append(chunk_state)
         if end >= len(text):
             break

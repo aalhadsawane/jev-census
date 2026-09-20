@@ -24,8 +24,8 @@ cents to observe it.
 | **P4 Scale** | Runs a real corpus | 100k+ rows unattended without intervention | 2 days | ✅ done |
 | **P5 Planner** | Projections and grouping | Two projections produce two calls per document | 1 day | ✅ done |
 | **P6 Quality** | Trustworthy columns | Validation report with per-question accuracy | 3 days | ⚠️ infra done, gold-labelling pending |
-| **P7 Adoption** | Installable and demoable | Clean clone → labelled results in 5 min | 2 days | next |
-| **P8 Launch** | Public analysis | Published with methodology and raw data | 3 days | |
+| **P7 Adoption** | Installable and demoable | Clean clone → labelled results in 5 min | 2 days | ✅ done |
+| **P8 Launch** | Public analysis | Published with methodology and raw data | 3 days | next |
 
 Roughly three weeks of evenings. P6 is the phase that makes this a portfolio project rather than a
 script; P8 is the phase that makes it visible. Neither works without P1–P5.
@@ -186,6 +186,11 @@ publishable artifact in the repository — nobody in the Jev ecosystem has measu
 ## P7 — Adoption
 
 Spec: [`06-P7-ADOPTION.md`](06-P7-ADOPTION.md).
+
+**Status:** complete and live-verified — clean install timed at 60s total (11s install + 49s demo),
+three example question sets each with a real committed validation report, every `RECIPES.md` query
+tested against real output, README numbers checked against `scripts/readme_numbers.py`. Found and fixed
+a real chunking bug that only a real long document could expose (`DECISIONS.md`'s 2026-09-21 entry).
 
 | ID | Task | Depends | Done when |
 |---|---|---|---|

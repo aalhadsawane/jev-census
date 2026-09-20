@@ -1,0 +1,46 @@
+version: 1
+name: readme-quality
+defaults:
+  projection: [body]
+
+questions:
+  - id: has_quickstart
+    type: noul
+    instructions: The document gives inline steps to install or run the project, not just a link to external docs.
+    criteria:
+      "true":  Installation or a runnable first example is described directly in the document.
+      "false": No inline installation guidance; at most a link to docs elsewhere.
+
+  - id: has_code_examples
+    type: noul
+    instructions: The document includes actual code snippets demonstrating usage, not just prose description.
+    criteria:
+      "true":  At least one concrete code block showing how to use the project.
+      "false": No code examples, only descriptive text.
+
+  - id: primary_ecosystem
+    type: choice
+    instructions: The primary technology ecosystem or domain the project belongs to.
+    criteria:
+      web_frontend:   Browser-based UI frameworks, component libraries, or CSS/styling tools.
+      backend_server: Server frameworks, HTTP clients, web application backends, or routing libraries.
+      data_ml:        Data analysis, numerical computing, or machine learning.
+      infrastructure: Container orchestration, language toolchains, runtimes, or developer tooling not tied to one app layer.
+      other:          Anything not covered above.
+
+  - id: documentation_clarity
+    type: score
+    instructions: How clear and well-organized the document is for a newcomer deciding whether and how to use the project.
+    gate: exploratory
+    criteria:
+      - Minimal or disorganized; hard to know where to start.
+      - Basic structure present but sparse detail.
+      - Clear structure with adequate detail and examples.
+      - Thorough, well-organized, and beginner-friendly throughout.
+
+  - id: assumes_expertise
+    type: noul
+    instructions: The document assumes the reader already has significant prior expertise in the project's specific domain.
+    criteria:
+      "true":  Uses domain jargon or advanced concepts without explanation.
+      "false": Explains or avoids domain-specific jargon for a general technical audience.
