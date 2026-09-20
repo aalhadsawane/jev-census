@@ -23,8 +23,8 @@ cents to observe it.
 | **P3 Cost** | Knows the price before spending | `estimate` within 10% of actual | 1.5 days | ✅ done |
 | **P4 Scale** | Runs a real corpus | 100k+ rows unattended without intervention | 2 days | ✅ done |
 | **P5 Planner** | Projections and grouping | Two projections produce two calls per document | 1 day | ✅ done |
-| **P6 Quality** | Trustworthy columns | Validation report with per-question accuracy | 3 days | next |
-| **P7 Adoption** | Installable and demoable | Clean clone → labelled results in 5 min | 2 days | |
+| **P6 Quality** | Trustworthy columns | Validation report with per-question accuracy | 3 days | ⚠️ infra done, gold-labelling pending |
+| **P7 Adoption** | Installable and demoable | Clean clone → labelled results in 5 min | 2 days | next |
 | **P8 Launch** | Public analysis | Published with methodology and raw data | 3 days | |
 
 Roughly three weeks of evenings. P6 is the phase that makes this a portfolio project rather than a
@@ -156,6 +156,12 @@ group's fields — asserted by the *absence* of the other group's fields, not by
 ## P6 — Quality *(the differentiator)*
 
 This phase is what separates the project from a script. Do not compress it.
+
+**Status:** T6.1–T6.8's software is built, tested (297 tests), and live-verified against the real API,
+including closing open questions H and I in `00-JEV-API.md` with real measurements. What remains is not
+engineering: a real ≥200-item gold set per published question, requiring sustained human labelling
+against real ticket content — see `DECISIONS.md`'s 2026-09-21 entry for exactly what was and wasn't
+completed and why. Do not read the software being done as the phase being done.
 
 Spec: [`05-P6-QUALITY.md`](05-P6-QUALITY.md). Read it before T6.1 — the sampling weights it defines
 are load-bearing for every statistic in T6.2–T6.4, and a report built without them looks correct and

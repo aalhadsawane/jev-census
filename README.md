@@ -199,14 +199,17 @@ classifying; `census` makes the result trustworthy, affordable and reproducible.
 
 ## Status
 
-**Engine built, quality phase next.** Phases P0–P5 are complete and merged: `census run` and
-`census estimate` work end to end against the live API, survive `kill -9` and `SIGINT`, cache at cell
-granularity, cap spend in integer micro-dollars, have run 120,000 documents unattended, and plan real
-call groups from a question set's declared projections — a two-projection question set genuinely
-sends two calls per document, live-verified at a measured 53% cost increase for the extra call. P6–P8
-— the validation report, packaging and the launch analysis — are specified and not yet built, so the
-figures above are still design projections rather than measured numbers. P7 replaces each of them
-with output from a command in this README.
+**Engine and quality tooling built; gold-labelling is the remaining gap.** Phases P0–P5 are complete
+and merged: `census run` and `census estimate` work end to end against the live API, survive `kill -9`
+and `SIGINT`, cache at cell granularity, cap spend in integer micro-dollars, have run 120,000 documents
+unattended, and plan real call groups from a question set's declared projections — a two-projection
+question set genuinely sends two calls per document, live-verified at a measured 53% cost increase for
+the extra call. P6's software — `census label`, `validate`, `report`, `review`, `schema-tune`,
+`ablation` — is built, tested, and live-verified too, but a real ≥200-item gold set per published
+question needs sustained human labelling that hasn't happened yet; see `DECISIONS.md`. P7–P8 —
+packaging and the launch analysis — are specified and not yet built, so the figures above are still
+design projections rather than measured numbers. P7 replaces each of them with output from a command
+in this README.
 
 | Document | What it holds |
 |---|---|

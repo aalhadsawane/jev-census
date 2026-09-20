@@ -567,6 +567,13 @@ async def run_scheduled(config: SchedulerConfig, client: AsyncAskingClient) -> R
             "questionset_hash": question_set.questionset_hash,
             "questions": {q.id: q.body_hash for q in question_set.questions},
             "input_path": str(config.input_path),
+            "id_field": config.id_field,
+            # {projection_id: [fields]}: the only piece of a call group not
+            # recoverable from cells.parquet itself (which carries
+            # projection_id but not what it hashes). P6's `census label`
+            # needs this to know which corpus columns to show a labeller for
+            # a given question, without re-reading the question set YAML.
+            "projection_groups": {group.projection_id: list(group.fields) for group in call_groups},
             "created_at": datetime.now(UTC).isoformat(),
         }
         run_dir.mkdir(parents=True, exist_ok=True)

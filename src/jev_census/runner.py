@@ -139,6 +139,10 @@ def run_census(config: RunConfig, client: AskingClient) -> RunResult:
     question_set = load_question_set(config.questions_path)
     questions_by_id = {q.id: q for q in question_set.questions}
 
+    projection_fields: set[str] = set()
+    for q in question_set.questions:
+        projection_fields.update(question_set.resolved_projection(q))
+
     if config.resume_run_id is not None:
         run_id = config.resume_run_id
         run_dir = config.census_dir / "runs" / run_id
@@ -161,6 +165,12 @@ def run_census(config: RunConfig, client: AskingClient) -> RunResult:
             "questionset_hash": question_set.questionset_hash,
             "questions": {q.id: q.body_hash for q in question_set.questions},
             "input_path": str(config.input_path),
+            "id_field": config.id_field,
+            # Single-group only (this is the frozen sequential reference
+            # implementation — see planner.py/P5 for real grouping), but P6
+            # reads this key the same way regardless of which runner
+            # produced the manifest.
+            "projection_groups": {"p0": sorted(projection_fields)},
             "created_at": datetime.now(UTC).isoformat(),
         }
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -178,10 +188,6 @@ def run_census(config: RunConfig, client: AskingClient) -> RunResult:
         prior_checkpoint["total_input_tokens_charged"] if prior_checkpoint else 0
     )
     budget_micro_usd = usd_to_micro_usd(config.budget_usd)
-
-    projection_fields: set[str] = set()
-    for q in question_set.questions:
-        projection_fields.update(question_set.resolved_projection(q))
 
     docs_iter = normalize(read_source(config.input_path), id_field=config.id_field, quarantine=quarantine)
     if config.limit is not None:
