@@ -1,0 +1,46 @@
+version: 1
+name: hn-demo
+defaults:
+  projection: [title]      # the corpus has no body text -- the title is the whole document
+
+questions:
+  - id: shows_something_built
+    type: noul
+    instructions: The post announces something the author personally built or created.
+    criteria:
+      "true":  A project, tool, product, or piece of writing the poster made themselves.
+      "false": News, a question, a link to someone else's work, or general discussion.
+
+  - id: topic_area
+    type: choice
+    instructions: The primary subject area of the post.
+    criteria:
+      programming: Code, languages, frameworks, or software engineering practice.
+      ai_ml:       Artificial intelligence, machine learning, or language models.
+      business:    Startups, funding, companies, markets, or careers.
+      science:     Physics, biology, math, space, or other natural sciences.
+      other:       Anything not covered above.
+
+  - id: likely_controversial
+    type: noul
+    instructions: The post's framing or topic is likely to provoke disagreement or a heated discussion in the comments.
+    criteria:
+      "true":  Politically charged, a hot take, or a topic prone to strong opinions.
+      "false": Neutral, factual, or unlikely to provoke pushback.
+
+  - id: technical_depth
+    type: score
+    instructions: How much technical background a reader needs to understand the post from its title alone.
+    gate: exploratory
+    criteria:
+      - General audience; no special knowledge needed.
+      - Some familiarity with software or technology helpful.
+      - Assumes working knowledge of a specific technical field.
+      - Requires specialist expertise to fully understand.
+
+  - id: is_question_post
+    type: noul
+    instructions: The post is phrased as a direct question to the community, "Ask HN" style, rather than a link or announcement.
+    criteria:
+      "true":  Explicitly asks the reader a question or requests input.
+      "false": Shares a link, news, or an announcement without directly asking a question.

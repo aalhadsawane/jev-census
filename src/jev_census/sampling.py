@@ -274,3 +274,36 @@ def read_label_csv(path: str | Path) -> list[dict]:
             row["confidence"] = _maybe_float(row.get("confidence"))
             rows.append(row)
     return rows
+
+
+def label_rows_from_cells(
+    gold_rows: list[dict], cells_by_doc_id: dict[str, dict], *, default_weight: float = 1.0
+) -> list[dict]:
+    """Rebuilds label-CSV-shaped scoring rows from a set of
+    `(doc_id, gold_answer[, stratum_weight])` rows and a run's cells, keyed
+    by doc_id — used wherever existing gold labels need to score a
+    DIFFERENT run's (or a fresh run's) answers for the same documents.
+    `ablation.py`'s T6.8 comparison uses this to score two runs against one
+    gold set; `census demo`'s bundled gold set (doc_id + gold_answer only,
+    no `stratum_weight`) uses it to score whatever the current demo run
+    just produced, so the bundled labels never go stale relative to model
+    changes. `default_weight` fills in for gold rows that carry no
+    `stratum_weight` of their own."""
+    rows = []
+    for gold_row in gold_rows:
+        cell = cells_by_doc_id.get(gold_row["doc_id"])
+        if cell is None:
+            continue
+        rows.append(
+            {
+                "type": cell["type"],
+                "model_noul": cell.get("noul"),
+                "model_choice": cell.get("choice"),
+                "model_score": cell.get("score"),
+                "model_modal_level": modal_level(cell) if cell["type"] == "score" else "",
+                "confidence": cell.get("confidence"),
+                "stratum_weight": gold_row.get("stratum_weight", default_weight),
+                "gold_answer": gold_row["gold_answer"],
+            }
+        )
+    return rows

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Ask the same questions of every row in a dataset, and get back a table — built on TypeSafe's Jev."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 dependencies = [
     "typesafe-sdk>=0.7.0",
     "pydantic>=2",
@@ -19,7 +19,7 @@ dependencies = [
 census = "jev_census.cli:app"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "duckdb>=1.0"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -27,6 +27,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# The demo corpus, gold set and question set (T7.2) must travel inside the
+# wheel or `census demo` fails only for people who installed the package --
+# the exact population this phase exists for (06-P7-ADOPTION.md).
+jev_census = ["demo_data/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

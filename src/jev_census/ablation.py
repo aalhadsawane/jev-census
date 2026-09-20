@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .question_set import Question, QuestionSet
-from .sampling import modal_level, read_label_csv
+from .sampling import label_rows_from_cells, read_label_csv
 from .scoring import QuestionScore, score_question
 
 
@@ -29,31 +29,6 @@ def full_record_variant(question_set: QuestionSet, all_fields: list[str]) -> Que
         Question(**{**q.model_dump(), "projection": list(all_fields)}) for q in question_set.questions
     ]
     return question_set.model_copy(update={"questions": new_questions})
-
-
-def _label_rows_from_cells(gold_rows: list[dict], cells_by_doc_id: dict[str, dict]) -> list[dict]:
-    """Rebuilds label-CSV-shaped rows for a DIFFERENT run's cells, reusing
-    an existing gold-labelled sample's doc_ids, stratum_weight, and
-    gold_answer — so the same gold labels can score two runs' answers for
-    the same documents without a second labelling effort."""
-    rows = []
-    for gold_row in gold_rows:
-        cell = cells_by_doc_id.get(gold_row["doc_id"])
-        if cell is None:
-            continue
-        rows.append(
-            {
-                "type": cell["type"],
-                "model_noul": cell.get("noul"),
-                "model_choice": cell.get("choice"),
-                "model_score": cell.get("score"),
-                "model_modal_level": modal_level(cell) if cell["type"] == "score" else "",
-                "confidence": cell.get("confidence"),
-                "stratum_weight": gold_row["stratum_weight"],
-                "gold_answer": gold_row["gold_answer"],
-            }
-        )
-    return rows
 
 
 @dataclass(frozen=True)
@@ -88,8 +63,8 @@ def run_ablation_comparison(
         projected_cells = {c["doc_id"]: c for c in projected_cells_by_question.get(question_id, [])}
         full_record_cells = {c["doc_id"]: c for c in full_record_cells_by_question.get(question_id, [])}
 
-        projected_rows = _label_rows_from_cells(gold_rows, projected_cells)
-        full_record_rows = _label_rows_from_cells(gold_rows, full_record_cells)
+        projected_rows = label_rows_from_cells(gold_rows, projected_cells)
+        full_record_rows = label_rows_from_cells(gold_rows, full_record_cells)
 
         results.append(
             AblationResult(

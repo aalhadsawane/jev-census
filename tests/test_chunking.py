@@ -13,6 +13,7 @@ from jev_census.chunking import aggregate_chunk_answers, chunk_document
 from jev_census.decoder import DecodedAnswer
 from jev_census.planner import CallGroup, ContextOverflowError
 from jev_census.question_set import Question
+from jev_census.token_estimator import estimate_tokens
 
 
 def _q(id, instructions="Judge the text.", criteria=None, type="noul"):
@@ -76,6 +77,34 @@ def test_chunking_preserves_other_fields_whole_in_every_chunk():
     assert len(chunks) > 1
     for c in chunks:
         assert c["subject"] == "Payouts failing"
+
+
+def test_chunk_document_shrinks_chunk_when_json_escaping_pushes_it_over_budget():
+    """Real prose with a lot of quotes and newlines (axios's README, live --
+    see DECISIONS.md's P7 entry) serializes to noticeably more characters
+    than its raw length once JSON-escaped, so a chunk sized by the naive
+    char/4 approximation can come out over budget once actually measured.
+    Every returned chunk's real, serialized token count must respect the
+    budget regardless."""
+    group = CallGroup(projection_id="x", fields=("body",), questions=(_q("a"),))
+    # Heavy on quotes/newlines/backslashes -- each inflates under JSON
+    # escaping (\", \n, \\) well beyond the flat 4-chars/token assumption.
+    paragraph = 'He said "hello\\world" and then\nwrote more "quoted text" here.\n'
+    long_text = paragraph * 400  # long enough to force chunking
+    state = {"body": long_text}
+    context_limit = 2000
+    margin = 0.15
+    chunks = chunk_document(state, group, context_limit=context_limit, margin=margin)
+    assert len(chunks) > 1
+
+    limit = int(context_limit * (1 - margin))
+    # Same schema-sizing chunk_document itself uses: the group's single
+    # question is both largest and smallest here.
+    from jev_census.planner import question_schema_tokens
+
+    schema_tokens = question_schema_tokens(group.questions[0])
+    for chunk in chunks:
+        assert estimate_tokens(chunk) + schema_tokens <= limit
 
 
 def test_chunk_document_raises_when_unsplittable_field_too_large():
