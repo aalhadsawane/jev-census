@@ -238,3 +238,202 @@ async def test_larger_corpus_completes(tmp_path):
     assert table.num_rows == n * 4
     pairs = [(r["doc_id"], r["question_id"]) for r in table.to_pylist()]
     assert len(pairs) == len(set(pairs))
+
+
+# --- P5 exit criterion: real call groups, not a hardcoded single group -----
+
+
+def _corpus_with_thread(tmp_path: Path, n: int = 20) -> Path:
+    rows = [
+        {
+            "ticket_id": f"T-{i:04d}",
+            "subject": f"subject {i}",
+            "body": f"unique body text for row {i}",
+            "thread": f"full thread text for row {i}",
+        }
+        for i in range(n)
+    ]
+    path = tmp_path / "tickets.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    return path
+
+
+async def test_two_projection_question_set_makes_two_calls_per_document(tmp_path):
+    """The literal P5 exit criterion (02-BUILD-PLAN.md): a two-projection
+    question set produces two calls per document, each state carrying only
+    its group's fields. The call-count check alone would pass even with both
+    states unioned into one call's worth of fields -- the field-absence
+    assertion is what actually proves the groups are isolated."""
+    n = 10
+    config = SchedulerConfig(
+        input_path=_corpus_with_thread(tmp_path, n=n),
+        questions_path=FIXTURES / "support-triage-two-projections.yaml",
+        budget_usd=1000.0,
+        out_dir=tmp_path / "results",
+        census_dir=tmp_path / ".census",
+        id_field="ticket_id",
+        concurrency_initial=4,
+        concurrency_ceiling=8,
+    )
+    client = FakeAsyncJevClient()
+    result = await run_scheduled(config, client)
+
+    assert result.documents_processed == n
+    # 2 questions in the [subject, body] group + 1 in the [subject, body,
+    # thread] group = 2 calls per document.
+    assert client.call_count == n * 2
+
+    calls_per_doc: dict[tuple, list] = {}
+    for state, qids in client.calls:
+        calls_per_doc.setdefault(state.get("body"), []).append((state, qids))
+    for calls in calls_per_doc.values():
+        assert len(calls) == 2
+        states_by_qids = {qids: state for state, qids in calls}
+        narrow_state = states_by_qids[("department", "is_urgent")]
+        wide_state = states_by_qids[("thread_went_hostile",)]
+        # The negative assertion that actually matters: the narrow group's
+        # call never saw the wide group's extra field.
+        assert "thread" not in narrow_state
+        assert "thread" in wide_state
+
+    table = pq.read_table(result.out_path)
+    assert table.num_rows == n * 3  # 3 questions total, one row per (doc, question)
+
+    rows = table.to_pylist()
+    projection_ids = {r["question_id"]: r["projection_id"] for r in rows}
+    assert projection_ids["is_urgent"] == projection_ids["department"]
+    assert projection_ids["thread_went_hostile"] != projection_ids["is_urgent"]
+
+    call_ids = {r["question_id"]: r["call_id"] for r in rows}
+    assert call_ids["is_urgent"] == call_ids["department"]
+    assert call_ids["thread_went_hostile"] != call_ids["is_urgent"]
+
+
+async def test_two_projection_resume_matches_clean_run(tmp_path):
+    """Resume correctness (T2.7's invariant) must hold across multiple call
+    groups too, not just the single-group case it was originally proven on."""
+    n = 20
+    corpus = _corpus_with_thread(tmp_path, n=n)
+    questions_path = FIXTURES / "support-triage-two-projections.yaml"
+
+    partial_config = SchedulerConfig(
+        input_path=corpus, questions_path=questions_path, budget_usd=1000.0,
+        out_dir=tmp_path / "results", census_dir=tmp_path / ".census",
+        id_field="ticket_id", shard_size=3, limit=8,
+    )
+    partial_result = await run_scheduled(partial_config, FakeAsyncJevClient())
+    assert partial_result.documents_processed == 8
+
+    resume_config = SchedulerConfig(
+        input_path=corpus, questions_path=questions_path, budget_usd=1000.0,
+        out_dir=tmp_path / "results", census_dir=tmp_path / ".census",
+        id_field="ticket_id", shard_size=3, resume_run_id=partial_result.run_id,
+    )
+    resumed_result = await run_scheduled(resume_config, FakeAsyncJevClient())
+    assert resumed_result.documents_already_done == 8
+    assert resumed_result.documents_processed == n - 8
+
+    table = pq.read_table(resumed_result.out_path)
+    assert table.num_rows == n * 3
+    pairs = [(r["doc_id"], r["question_id"]) for r in table.to_pylist()]
+    assert len(pairs) == len(set(pairs)), "duplicate cells after resuming a multi-group run"
+
+
+async def test_long_document_is_chunked_and_aggregated_end_to_end(tmp_path):
+    """T5.4 through the real Scheduler pipeline, not just chunking.py's unit
+    tests: a document whose body alone exceeds CONTEXT_LIMIT_TOKENS gets
+    split, answered per chunk, and aggregated back into one cell per
+    question with confidence_source='derived' and chunk_count > 1 -- while
+    ordinary short documents in the same corpus are untouched
+    (chunk_count == 1, confidence_source unchanged)."""
+    n_short = 5
+    rows = [
+        {"ticket_id": f"T-{i:04d}", "subject": f"subject {i}", "body": f"short body text {i}"}
+        for i in range(n_short)
+    ]
+    # ~200,000 chars is comfortably over the measured ~32.8k-token limit.
+    long_body = "word " * 40_000
+    rows.append({"ticket_id": "T-LONG", "subject": "a long ticket", "body": long_body})
+    corpus = tmp_path / "tickets.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), corpus)
+
+    config = SchedulerConfig(
+        input_path=corpus, questions_path=FIXTURES / "support-triage.yaml", budget_usd=1000.0,
+        out_dir=tmp_path / "results", census_dir=tmp_path / ".census", id_field="ticket_id",
+        concurrency_initial=2, concurrency_ceiling=4,
+    )
+    result = await run_scheduled(config, FakeAsyncJevClient())
+    assert result.documents_processed == n_short + 1
+    assert result.documents_quarantined == 0
+
+    table = pq.read_table(result.out_path)
+    rows_out = table.to_pylist()
+
+    long_rows = [r for r in rows_out if r["doc_id"] == "T-LONG"]
+    assert len(long_rows) == 4  # all 4 questions still answered
+    for r in long_rows:
+        assert r["chunk_count"] > 1
+        assert r["confidence_source"] == "derived"
+
+    short_rows = [r for r in rows_out if r["doc_id"] == "T-0000"]
+    assert len(short_rows) == 4
+    for r in short_rows:
+        assert r["chunk_count"] == 1
+
+
+async def test_document_that_cannot_fit_even_chunked_is_quarantined(tmp_path):
+    """T5.4: when even a single chunk can't fit -- here, two fields that are
+    each individually oversized -- the document is quarantined with reason
+    state_exceeds_context and the run continues rather than aborting
+    (01-DESIGN.md: 'Chunk or quarantine. Never truncate silently.')."""
+    n_short = 3
+    rows = [
+        {"ticket_id": f"T-{i:04d}", "subject": f"subject {i}", "body": f"short body text {i}"}
+        for i in range(n_short)
+    ]
+    # Both fields individually huge: splitting the larger one still leaves
+    # the other (now the "other_fields" remainder) too big to fit alongside
+    # even the cheapest question.
+    rows.append(
+        {
+            "ticket_id": "T-HUGE",
+            "subject": "word " * 40_000,
+            "body": "word " * 40_000,
+        }
+    )
+    corpus = tmp_path / "tickets.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), corpus)
+
+    config = SchedulerConfig(
+        input_path=corpus, questions_path=FIXTURES / "support-triage.yaml", budget_usd=1000.0,
+        out_dir=tmp_path / "results", census_dir=tmp_path / ".census", id_field="ticket_id",
+        concurrency_initial=2, concurrency_ceiling=4,
+    )
+    result = await run_scheduled(config, FakeAsyncJevClient())
+    assert result.documents_processed == n_short
+    assert result.documents_quarantined == 1
+
+    table = pq.read_table(result.out_path)
+    doc_ids = {r["doc_id"] for r in table.to_pylist()}
+    assert "T-HUGE" not in doc_ids
+
+    quarantine_path = config.census_dir / "runs" / result.run_id / "quarantine.jsonl"
+    entries = [line for line in quarantine_path.read_text().splitlines() if line.strip()]
+    assert any("state_exceeds_context" in line for line in entries)
+
+
+async def test_typo_projection_field_aborts_with_clear_message(tmp_path):
+    """T5.1's runtime check: a projection field that isn't a real column
+    aborts on document 1 with the field name and the available columns,
+    rather than silently sending null."""
+    bad_yaml = tmp_path / "bad.yaml"
+    bad_yaml.write_text(
+        "version: 1\nname: bad\ndefaults:\n  projection: [subjct, body]\n"
+        "questions:\n  - id: q1\n    type: noul\n    instructions: The text is urgent.\n"
+    )
+    config = SchedulerConfig(
+        input_path=_corpus(tmp_path), questions_path=bad_yaml, budget_usd=10.0,
+        out_dir=tmp_path / "results", census_dir=tmp_path / ".census", id_field="ticket_id",
+    )
+    with pytest.raises(RunnerError, match="subjct"):
+        await run_scheduled(config, FakeAsyncJevClient())

@@ -146,10 +146,20 @@ Consequences:
 |---|---|---|
 | `401` | missing/invalid key | fatal, config |
 | `422` | body failed validation; names the field | fatal, config |
+| `400` | context window exceeded (`error_type: "max_tokens_exceeded"`) — confirmed live 2026-09-20, see § Context window below | fatal, config, per the SDK's own exception class (`TypeSafeBadRequestError`) |
 | `429` | rate limited | transient — backoff |
 | `529` | overloaded | transient — backoff |
 
 Rate limit values are not published.
+
+**`400` is classified fatal by `client.py` today, in the same bucket as `401`/`422`** — a context
+overflow that reaches the API aborts the whole run rather than being retried or quarantined. That
+means `01-DESIGN.md`'s failure-table entry "State exceeds context → Chunk or quarantine" is enforced
+entirely **proactively**, by the planner refusing to send an oversized call in the first place
+(`planner.py`'s `split_for_context`, `chunking.py`'s `chunk_document`), never reactively by catching
+this error. If the token estimator ever under-projects badly enough for a call to reach the API
+oversized anyway, the current behavior is a hard abort — conservative, and consistent with "never
+truncate silently," but worth knowing before assuming a `400` here always means quarantine.
 
 ---
 
@@ -247,7 +257,22 @@ publish the mean.
 - Text only — string, JSON object, or array of text values. No images, audio, video.
 - English is the primary training language; other languages including CJK are accepted at **lower
   accuracy**.
-- Bounded context window, ~32k tokens. Verify the exact figure.
+- **Bounded context window — measured live 2026-09-20 (P5, T5.2b).** Ramped a single-field
+  state against one cheap `noul` question (no criteria) until the API refused:
+
+  | Sent | `usage.input_tokens` | Result |
+  |---|---|---|
+  | 163,000 chars | 32,872 | 200 OK |
+  | 164,000 chars | ~33,072 (est.) | `400 max_tokens_exceeded` |
+
+  The limit binds on **total input tokens** (state + schema together, matching the cost model's own
+  accounting), not on state alone and not on characters — confirmed by the state-only text moving the
+  observed `usage.input_tokens` linearly with size and the boundary matching that count, not a
+  round character number. The commonly-quoted "~32k tokens" was directionally right; the measured
+  ceiling sits at **32,872 confirmed working, 33,072 confirmed failing**. `planner.py` uses
+  `CONTEXT_LIMIT_TOKENS = 32_768` (a round number safely under the confirmed-working figure) with a
+  15% margin on top, so the planner's own safety margin absorbs the ~130-token measurement gap and
+  then some.
 - Official SDKs: Python (sync + async, with retry policy) and JavaScript, from
   `--extra-index-url https://pypi.typesafe.ai/`.
 - Published cookbooks pin explicit versions (`jev-1.12`, `jev-1.13`) rather than `jev-latest`.

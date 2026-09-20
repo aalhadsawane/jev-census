@@ -22,8 +22,8 @@ cents to observe it.
 | **P2 Durability** | Survives interruption | `kill -9` + resume is identical to a clean run | 2 days | ✅ done |
 | **P3 Cost** | Knows the price before spending | `estimate` within 10% of actual | 1.5 days | ✅ done |
 | **P4 Scale** | Runs a real corpus | 100k+ rows unattended without intervention | 2 days | ✅ done |
-| **P5 Planner** | Projections and grouping | Two projections produce two calls per document | 1 day | next |
-| **P6 Quality** | Trustworthy columns | Validation report with per-question accuracy | 3 days | |
+| **P5 Planner** | Projections and grouping | Two projections produce two calls per document | 1 day | ✅ done |
+| **P6 Quality** | Trustworthy columns | Validation report with per-question accuracy | 3 days | next |
 | **P7 Adoption** | Installable and demoable | Clean clone → labelled results in 5 min | 2 days | |
 | **P8 Launch** | Public analysis | Published with methodology and raw data | 3 days | |
 
