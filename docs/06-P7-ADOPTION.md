@@ -37,6 +37,14 @@ Four minutes, one command, one credential, no clone.
 **Build:** `uv build` producing a wheel and sdist; `pip install jev-census` works in a venv that never
 saw the source; the `census` entry point is on `PATH`.
 
+**"Publish" means two different things — don't let verifying one stand in for the other.**
+`scripts/verify_clean_install.sh` proves the *packaging* is correct: it builds a wheel from this source
+tree and installs that wheel file, in a venv outside the repo. It does not touch PyPI, so it cannot
+prove `pip install jev-census` — installing the package *by name* — actually works, because the
+package has never been published there. See `DECISIONS.md`'s "Flagged: pip install jev-census doesn't
+work yet" entry before treating T7.1 as fully closed; `docs/RUNNING-LOCALLY.md` is the from-source
+workaround until a real publish happens.
+
 **Two specific traps in this codebase:**
 
 1. **`cli.py` imports `tests.fakes`** inside `_build_async_client()` when `CENSUS_FAKE_CLIENT=1`. That
