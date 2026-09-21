@@ -13,6 +13,10 @@ text, at $0.042 per million input tokens.
 
 ## Try it for real, right now
 
+Not yet published to PyPI — `pip install jev-census` doesn't work as literally written below yet (see
+`DECISIONS.md`). Until it is, `docs/RUNNING-LOCALLY.md` has the verified equivalent from source
+(a two-command venv + editable install, then everything below works exactly as shown):
+
 ```
 $ pip install jev-census
 $ export TYPESAFE_API_KEY=...
@@ -279,11 +283,14 @@ all live-verified, including on real long-form data that found and fixed a real 
 exercised end to end, including live against the real API, with real (if example-scale, honestly
 disclosed) gold sets. What has not happened is a real ≥150–250-item gold set per question for a
 production corpus — that needs sustained human judgment, not more engineering, and is P8's job before
-any launch-scale claim gets made. See `DECISIONS.md`'s dated entries for exactly what was verified and
-what wasn't, phase by phase.
+any launch-scale claim gets made. **Also not done: publishing to PyPI** — every install verified so far
+is from a locally-built wheel, not a real `pip install jev-census`; see `docs/RUNNING-LOCALLY.md` to run
+it today, and `DECISIONS.md` for what's blocking the real publish. See `DECISIONS.md`'s dated entries
+for exactly what was verified and what wasn't, phase by phase.
 
 | Document | What it holds |
 |---|---|
+| [`docs/RUNNING-LOCALLY.md`](docs/RUNNING-LOCALLY.md) | How to build and run this today, before it's on PyPI. |
 | [`docs/00-JEV-API.md`](docs/00-JEV-API.md) | The verified Jev contract, cost model and documented model limits. Facts, with citations. |
 | [`docs/01-DESIGN.md`](docs/01-DESIGN.md) | Design drivers, architecture, data model, question format, output schema, CLI. |
 | [`docs/02-BUILD-PLAN.md`](docs/02-BUILD-PLAN.md) | The sequenced task list: 8 phases, explicit dependencies, done-when for each task. |
@@ -306,7 +313,7 @@ Hacker News posts.*
 The `jev-` prefix is deliberate. Jev is what makes the product possible, and in an ecosystem this
 young the model's name is also how people find the tool.
 
-- Repository and package: **`jev-census`** — `pip install jev-census`
+- Repository and package: **`jev-census`** — `pip install jev-census` once published; `docs/RUNNING-LOCALLY.md` in the meantime
 - Command: **`census`** — short enough to type in the examples above
 
 Licence: Apache-2.0, matching the ecosystem norm.

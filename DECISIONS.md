@@ -4,6 +4,41 @@ Divergences from the design docs, and why. Newest first.
 
 ---
 
+## 2026-09-21 — Flagged: `pip install jev-census` doesn't work yet — not published to PyPI
+
+Caught by the user testing the README's own instructions, not by anything in this session's own
+verification. **This is a real gap in the P7 completion claim, not a documentation nit**: T7.1's
+acceptance in `06-P7-ADOPTION.md` ("`pip install jev-census` works in a venv that never saw the
+source") was verified exactly as `scripts/verify_clean_install.sh` does it — build a wheel *from this
+source tree*, install *that wheel file*, in a venv outside the repo. That proves the packaging
+mechanics work (package-data, entry point, no source-tree leakage). It does not prove `pip install
+jev-census` — the literal command the README showed as the very first thing a stranger runs — because
+the package has never been published to PyPI, and installing a locally-built wheel by its file path is
+not the same thing as installing a name from an index. Every place this session wrote or said "P7 is
+done" should be read with that distinction now made explicit, not assumed.
+
+**Fixed:**
+- `README.md`'s "Try it for real, right now" section no longer presents `pip install jev-census` as a
+  command that works today; it says so plainly and points to the workaround.
+- `docs/RUNNING-LOCALLY.md` (new): the verified, from-source equivalent — venv, editable install (or a
+  from-source wheel build if you want to test packaging specifically), API key, demo. Every command in
+  it was re-run against a genuinely fresh `git clone` of the real GitHub repo before being written down,
+  not copied from an earlier session's memory of having worked.
+
+**Not fixed, and deliberately not attempted without being asked**: actually publishing to PyPI. That
+needs a PyPI account and an API token that don't exist in this session, is a real, public, effectively
+irreversible action (a released version number can't be reused even if pulled), and is exactly the kind
+of outward-facing action this project's standing rules require confirming first rather than doing as a
+side effect of a documentation fix. Treat this as the next concrete task before `pip install jev-census`
+can be true: create a PyPI account/token (the user's own, held outside this session), then `python -m
+build && twine upload dist/*` (or wire it into a release workflow) from a clean `main`.
+
+Until that happens, `06-P7-ADOPTION.md`'s T7.1 should be read as "packaging is correct and installs
+cleanly from a local build" — true and verified — not "published and installable by name" — not yet
+true, and no future session should re-close T7.1 without re-reading this entry first.
+
+---
+
 ## 2026-09-21 — Phase P7 (adoption) complete, live-verified, one real bug found by real scale
 
 Built per `06-P7-ADOPTION.md` (T7.1–T7.5): `scripts/verify_clean_install.sh`, package-data wiring for a
